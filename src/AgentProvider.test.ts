@@ -837,7 +837,7 @@ describe("opencode factory", () => {
       },
     });
     expect(provider.parseStreamLine(line)).toEqual([
-      { type: "tool_call", name: "Bash", args: "npm test" },
+      { type: "tool_call", name: "bash", args: "npm test" },
     ]);
   });
 
@@ -853,7 +853,7 @@ describe("opencode factory", () => {
       },
     });
     expect(provider.parseStreamLine(line)).toEqual([
-      { type: "tool_call", name: "WebFetch", args: "https://example.com" },
+      { type: "tool_call", name: "webfetch", args: "https://example.com" },
     ]);
   });
 
@@ -872,7 +872,7 @@ describe("opencode factory", () => {
       },
     });
     expect(provider.parseStreamLine(line)).toEqual([
-      { type: "tool_call", name: "Agent", args: "Explore the repo" },
+      { type: "tool_call", name: "task", args: "Explore the repo" },
     ]);
   });
 

@@ -362,16 +362,12 @@ export const codex = (
 // OpenCode agent provider
 // ---------------------------------------------------------------------------
 
-/** Maps allowlisted OpenCode tool names to a display name and the input field
- *  containing the display arg. OpenCode tool names are lowercase and differ
- *  from Claude/Pi's; we normalise the display name to match the other agents. */
-const OPENCODE_TOOL_ARG_FIELDS: Record<
-  string,
-  { readonly name: string; readonly field: string }
-> = {
-  bash: { name: "Bash", field: "command" },
-  webfetch: { name: "WebFetch", field: "url" },
-  task: { name: "Agent", field: "description" },
+/** Maps allowlisted OpenCode tool names to the input field containing the
+ *  display arg. The tool name is surfaced as-is (OpenCode's lowercase names). */
+const OPENCODE_TOOL_ARG_FIELDS: Record<string, string> = {
+  bash: "command",
+  webfetch: "url",
+  task: "description",
 };
 
 const parseOpenCodeStreamLine = (line: string): ParsedStreamEvent[] => {
@@ -401,13 +397,13 @@ const parseOpenCodeStreamLine = (line: string): ParsedStreamEvent[] => {
     // tool_use event → tool call. Tool name is in part.tool, args in
     // part.state.input. Only allowlisted tools are surfaced.
     if (obj.type === "tool_use" && part?.type === "tool") {
-      const mapping = OPENCODE_TOOL_ARG_FIELDS[part.tool];
-      if (mapping === undefined) return []; // not allowlisted
+      const argField = OPENCODE_TOOL_ARG_FIELDS[part.tool];
+      if (argField === undefined) return []; // not allowlisted
       const input = part.state?.input as Record<string, unknown> | undefined;
       if (!input) return [];
-      const argValue = input[mapping.field];
+      const argValue = input[argField];
       if (typeof argValue !== "string") return []; // missing/wrong arg field
-      return [{ type: "tool_call", name: mapping.name, args: argValue }];
+      return [{ type: "tool_call", name: part.tool, args: argValue }];
     }
 
     // step_finish, tool output, etc. → skip
