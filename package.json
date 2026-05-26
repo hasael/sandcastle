@@ -1,6 +1,6 @@
 {
   "name": "@ai-hero/sandcastle",
-  "version": "0.5.8",
+  "version": "0.5.12",
   "description": "CLI for orchestrating AI agents in isolated sandbox environments",
   "type": "module",
   "main": "./dist/index.js",
@@ -71,7 +71,8 @@
     "lint-staged": "^15.5.1",
     "prettier": "^3.5.3",
     "tsx": "^4.21.0",
-    "vitest": "^3.2.0"
+    "vitest": "^3.2.0",
+    "@daytona/sdk": "^0.164.0"
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",

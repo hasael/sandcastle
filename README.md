@@ -57,7 +57,7 @@ import { run, claudeCode } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 await run({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   sandbox: docker(), // or podman(), vercel(), or your own provider
   promptFile: ".sandcastle/prompt.md",
 });
@@ -65,14 +65,14 @@ await run({
 
 ## Sandbox Providers
 
-Sandcastle uses a `SandboxProvider` to create isolated environments. The `sandbox` option on `run()` and `createSandbox()` accepts any provider. A no-sandbox option is also available for `interactive()` and `wt.interactive()`. Built-in providers:
+Sandcastle uses a `SandboxProvider` to create isolated environments. The `sandbox` option on `run()`, `interactive()`, and `createSandbox()` accepts any provider, including `noSandbox()` — opt in to running the agent directly on the host when container isolation is undesired. Built-in providers:
 
-| Provider   | Import path                                | Type       | Accepted by                                   |
-| ---------- | ------------------------------------------ | ---------- | --------------------------------------------- |
-| Docker     | `@ai-hero/sandcastle/sandboxes/docker`     | Bind-mount | `run()`, `createSandbox()`, `interactive()`   |
-| Podman     | `@ai-hero/sandcastle/sandboxes/podman`     | Bind-mount | `run()`, `createSandbox()`, `interactive()`   |
-| Vercel     | `@ai-hero/sandcastle/sandboxes/vercel`     | Isolated   | `run()`, `createSandbox()`, `interactive()`   |
-| No-sandbox | `@ai-hero/sandcastle/sandboxes/no-sandbox` | None       | `interactive()`, `wt.interactive()` (default) |
+| Provider   | Import path                                | Type       | Accepted by                                 |
+| ---------- | ------------------------------------------ | ---------- | ------------------------------------------- |
+| Docker     | `@ai-hero/sandcastle/sandboxes/docker`     | Bind-mount | `run()`, `createSandbox()`, `interactive()` |
+| Podman     | `@ai-hero/sandcastle/sandboxes/podman`     | Bind-mount | `run()`, `createSandbox()`, `interactive()` |
+| Vercel     | `@ai-hero/sandcastle/sandboxes/vercel`     | Isolated   | `run()`, `createSandbox()`, `interactive()` |
+| No-sandbox | `@ai-hero/sandcastle/sandboxes/no-sandbox` | None       | `run()`, `createSandbox()`, `interactive()` |
 
 Worktree methods (`wt.run()`, `wt.interactive()`, `wt.createSandbox()`) accept the same providers as their top-level counterparts. `wt.interactive()` defaults to `noSandbox()` when no sandbox is specified.
 
@@ -84,14 +84,15 @@ import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 
 // Docker, Podman, and Vercel are interchangeable in run() and createSandbox():
 await run({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   sandbox: docker(),
   prompt: "...",
 });
 
-// No-sandbox runs the agent directly on the host — interactive() only:
+// No-sandbox runs the agent directly on the host — accepted by run(),
+// createSandbox(), and interactive(). Skips container isolation entirely:
 await interactive({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   sandbox: noSandbox(),
   prompt: "...", // optional — omit to launch the TUI with no initial prompt
   cwd: "/path/to/other-repo", // optional — defaults to process.cwd()
@@ -109,7 +110,7 @@ import { run, claudeCode } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 const result = await run({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   sandbox: docker(),
   promptFile: ".sandcastle/prompt.md",
 });
@@ -129,7 +130,7 @@ import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 const result = await run({
   // Agent provider — required. Pass a model string to claudeCode().
   // Optional second arg for provider-specific options like effort level.
-  agent: claudeCode("claude-opus-4-6", { effort: "high" }),
+  agent: claudeCode("claude-opus-4-7", { effort: "high" }),
 
   // Sandbox provider — required. Any SandboxProvider works (docker, podman, vercel, or custom).
   // Provider-specific config (like imageName, mounts) lives inside the provider factory call.
@@ -146,10 +147,18 @@ const result = await run({
       { hostPath: "~/.npm", sandboxPath: "/home/agent/.npm", readonly: true },
       { hostPath: "data", sandboxPath: "data" }, // mounts <cwd>/data → <sandbox-repo>/data
     ],
+    // Optional: SELinux volume label — "z" (default, shared), "Z" (private), or false (none).
+    // No-op on non-SELinux systems (Docker Desktop on macOS/Windows, Linux without SELinux).
+    selinuxLabel: "z",
     // Optional: provider-level env vars merged at launch time
     env: { DOCKER_SPECIFIC: "value" },
     // Optional: attach container to Docker network(s) — string or string[]
     network: "my-network",
+    // Optional: add the container user to supplementary groups via --group-add.
+    // Accepts group names or numeric GIDs (e.g. for a bind-mounted Docker socket).
+    groups: ["docker", 999],
+    // Optional: limit CPU resources via --cpus. Fractional values allowed (e.g. 1.5).
+    // cpus: 2,
   }),
 
   // Host repo directory — replaces process.cwd() as the anchor for
@@ -249,7 +258,7 @@ await using sandbox = await createSandbox({
 });
 
 const result = await sandbox.run({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   prompt: "Fix issue #42 in this repo.",
 });
 
@@ -270,7 +279,7 @@ await using sandbox = await createSandbox({
 
 // Step 1: implement
 const implResult = await sandbox.run({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   promptFile: ".sandcastle/implement.md",
   maxIterations: 5,
 });
@@ -328,7 +337,7 @@ if (closeResult.preservedWorktreePath) {
 
 | Option               | Type               | Default                       | Description                                                         |
 | -------------------- | ------------------ | ----------------------------- | ------------------------------------------------------------------- |
-| `agent`              | AgentProvider      | —                             | **Required.** Agent provider (e.g. `claudeCode("claude-opus-4-6")`) |
+| `agent`              | AgentProvider      | —                             | **Required.** Agent provider (e.g. `claudeCode("claude-opus-4-7")`) |
 | `prompt`             | string             | —                             | Inline prompt (mutually exclusive with `promptFile`)                |
 | `promptFile`         | string             | —                             | Path to prompt file (mutually exclusive with `prompt`)              |
 | `promptArgs`         | PromptArgs         | —                             | Key-value map for `{{KEY}}` placeholder substitution                |
@@ -377,13 +386,13 @@ console.log(wt.branch); // "agent/fix-42"
 
 // Run an interactive session in the worktree (defaults to noSandbox)
 await wt.interactive({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   prompt: "Explore the codebase and understand the bug.",
 });
 
 // Run an AFK agent in the worktree (sandbox is required)
 const result = await wt.run({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   sandbox: docker({ imageName: "sandcastle:myrepo" }),
   prompt: "Fix issue #42.",
   maxIterations: 3,
@@ -444,22 +453,22 @@ await sandbox.close();
 
 #### `WorktreeRunOptions`
 
-| Option               | Type                   | Default | Description                                                                                                                         |
-| -------------------- | ---------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`              | AgentProvider          | —       | **Required.** Agent provider                                                                                                        |
-| `sandbox`            | SandboxProvider        | —       | **Required.** Sandbox provider (AFK agents must be sandboxed)                                                                       |
-| `prompt`             | string                 | —       | Inline prompt (mutually exclusive with `promptFile`)                                                                                |
-| `promptFile`         | string                 | —       | Path to prompt file                                                                                                                 |
-| `maxIterations`      | number                 | 1       | Maximum iterations to run                                                                                                           |
-| `completionSignal`   | string \| string[]     | —       | Substring(s) to stop the iteration loop early                                                                                       |
-| `idleTimeoutSeconds` | number                 | 600     | Idle timeout in seconds                                                                                                             |
-| `name`               | string                 | —       | Optional run name                                                                                                                   |
-| `logging`            | LoggingOption          | file    | Logging mode                                                                                                                        |
-| `hooks`              | SandboxHooks           | —       | Lifecycle hooks (`host.*`, `sandbox.*`)                                                                                             |
-| `promptArgs`         | PromptArgs             | —       | Key-value map for `{{KEY}}` placeholder substitution                                                                                |
-| `env`                | Record<string, string> | —       | Environment variables to inject into the sandbox                                                                                    |
-| `resumeSession`      | string                 | —       | Resume a prior Claude Code session by ID. Incompatible with `maxIterations > 1`. Session file must exist on host.                   |
-| `signal`             | AbortSignal            | —       | Cancel the run when aborted. Kills the in-flight agent subprocess; the worktree is preserved on disk. Rejects with `signal.reason`. |
+| Option               | Type                   | Default | Description                                                                                                                          |
+| -------------------- | ---------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `agent`              | AgentProvider          | —       | **Required.** Agent provider                                                                                                         |
+| `sandbox`            | SandboxProvider        | —       | **Required.** Sandbox provider (AFK agents must be sandboxed)                                                                        |
+| `prompt`             | string                 | —       | Inline prompt (mutually exclusive with `promptFile`)                                                                                 |
+| `promptFile`         | string                 | —       | Path to prompt file                                                                                                                  |
+| `maxIterations`      | number                 | 1       | Maximum iterations to run                                                                                                            |
+| `completionSignal`   | string \| string[]     | —       | Substring(s) to stop the iteration loop early                                                                                        |
+| `idleTimeoutSeconds` | number                 | 600     | Idle timeout in seconds                                                                                                              |
+| `name`               | string                 | —       | Optional run name                                                                                                                    |
+| `logging`            | LoggingOption          | file    | Logging mode                                                                                                                         |
+| `hooks`              | SandboxHooks           | —       | Lifecycle hooks (`host.*`, `sandbox.*`)                                                                                              |
+| `promptArgs`         | PromptArgs             | —       | Key-value map for `{{KEY}}` placeholder substitution                                                                                 |
+| `env`                | Record<string, string> | —       | Environment variables to inject into the sandbox                                                                                     |
+| `resumeSession`      | string                 | —       | Resume a prior session by ID for agents that support resume. Incompatible with `maxIterations > 1`. Session file must exist on host. |
+| `signal`             | AbortSignal            | —       | Cancel the run when aborted. Kills the in-flight agent subprocess; the worktree is preserved on disk. Rejects with `signal.reason`.  |
 
 #### `WorktreeRunResult`
 
@@ -521,7 +530,7 @@ Commands run **inside the sandbox** after `sandbox.onSandboxReady` hooks complet
 ```markdown
 # Open issues
 
-!`gh issue list --state open --label Sandcastle --json number,title,body,comments,labels --limit 20`
+!`gh issue list --state open --label Sandcastle --json number,title,body,comments,labels --limit 100`
 
 # Recent commits
 
@@ -609,7 +618,7 @@ import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { z } from "zod";
 
 const result = await run({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   sandbox: docker(),
   prompt: `Analyze the code, and output the result as JSON inside <result> tags.
     The result must match this schema:
@@ -626,6 +635,26 @@ console.log(result.output.score); // typed as number
 ```
 
 `Output.string({ tag })` extracts the tag contents as a plain string (trimmed, no JSON parsing). Both helpers require `maxIterations` to be `1` (the default). The resolved prompt must contain the configured opening tag literal.
+
+When extraction or validation fails, `run()` throws a `StructuredOutputError`. Alongside `tag`, `rawMatched`, `cause`, `commits`, `branch`, and `preservedWorktreePath`, the error carries the `sessionId` (and `sessionFilePath`, when the session was captured) of the run that produced the bad output. You can resume that session to ask the agent to re-emit corrected output, without repeating the work:
+
+```ts
+import { run, Output, StructuredOutputError } from "@ai-hero/sandcastle";
+
+try {
+  return await run({ ...opts, output });
+} catch (e) {
+  if (e instanceof StructuredOutputError && e.sessionId) {
+    return await run({
+      ...opts,
+      output,
+      resumeSession: e.sessionId,
+      prompt: `Your previous output failed: ${e.message}. Re-emit it inside <${e.tag}> tags.`,
+    });
+  }
+  throw e;
+}
+```
 
 ### Templates
 
@@ -652,6 +681,7 @@ Scaffolds the `.sandcastle/` config directory and builds the container image. Th
 | `--image-name` | No       | `sandcastle:<repo-dir-name>` | Docker image name                                                    |
 | `--agent`      | No       | Interactive prompt           | Agent to use (`claude-code`, `pi`, `codex`, `opencode`)              |
 | `--model`      | No       | Agent's default model        | Model to use (e.g. `claude-sonnet-4-6`). Defaults to agent's default |
+| `--sandbox`    | No       | Interactive prompt           | Sandbox provider to use (`docker`, `podman`)                         |
 | `--template`   | No       | Interactive prompt           | Template to scaffold (e.g. `blank`, `simple-loop`)                   |
 
 Creates the following files:
@@ -704,7 +734,7 @@ Removes the Podman image.
 
 | Option               | Type               | Default                       | Description                                                                                                                                                     |
 | -------------------- | ------------------ | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`              | AgentProvider      | —                             | **Required.** Agent provider (e.g. `claudeCode("claude-opus-4-6")`, `pi("claude-sonnet-4-6")`, `codex("gpt-5.4-mini")`, `opencode("opencode/big-pickle")`)      |
+| `agent`              | AgentProvider      | —                             | **Required.** Agent provider (e.g. `claudeCode("claude-opus-4-7")`, `pi("claude-sonnet-4-6")`, `codex("gpt-5.4-mini")`, `opencode("opencode/big-pickle")`)      |
 | `sandbox`            | SandboxProvider    | —                             | **Required.** Sandbox provider (e.g. `docker()`, `podman()`, `docker({ imageName: "sandcastle:local" })`)                                                       |
 | `cwd`                | string             | `process.cwd()`               | Host repo directory — anchor for `.sandcastle/` artifacts and git operations. Relative paths resolve against `process.cwd()`.                                   |
 | `prompt`             | string             | —                             | Inline prompt (mutually exclusive with `promptFile`)                                                                                                            |
@@ -718,7 +748,7 @@ Removes the Podman image.
 | `logging`            | object             | file (auto-generated)         | `{ type: 'file', path }` or `{ type: 'stdout' }`                                                                                                                |
 | `completionSignal`   | string \| string[] | `<promise>COMPLETE</promise>` | String or array of strings the agent emits to stop the iteration loop early                                                                                     |
 | `idleTimeoutSeconds` | number             | `600`                         | Idle timeout in seconds — resets on each agent output event                                                                                                     |
-| `resumeSession`      | string             | —                             | Resume a prior Claude Code session by ID. Incompatible with `maxIterations > 1`. Session file must exist on host.                                               |
+| `resumeSession`      | string             | —                             | Resume a prior session by ID for agents that support resume. Incompatible with `maxIterations > 1`. Session file must exist on host.                            |
 | `signal`             | AbortSignal        | —                             | Cancel the run when aborted. Kills the in-flight agent subprocess and cancels lifecycle hooks; the worktree is preserved on disk. Rejects with `signal.reason`. |
 | `timeouts`           | Timeouts           | —                             | Override default timeouts for built-in lifecycle steps. Currently supports `{ copyToWorktreeMs?: number }` (default: 60 000).                                   |
 | `output`             | OutputDefinition   | —                             | Structured output definition (`Output.object(…)` or `Output.string(…)`). Requires `maxIterations === 1`. See [Structured output](#structured-output).           |
@@ -739,7 +769,7 @@ Removes the Podman image.
 
 | Field             | Type              | Description                                                                                                                         |
 | ----------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `sessionId`       | string?           | Claude Code session ID from the init line, or `undefined` for non-Claude agents                                                     |
+| `sessionId`       | string?           | Agent session ID from the provider stream, or `undefined` if the provider does not emit one                                         |
 | `sessionFilePath` | string?           | Absolute host path to the captured session JSONL, or `undefined` when capture is off                                                |
 | `usage`           | `IterationUsage`? | Token usage snapshot from the last assistant message, or `undefined` when capture is off or provider does not support usage parsing |
 
@@ -754,38 +784,52 @@ Removes the Podman image.
 
 ### Session capture
 
-After each Claude Code iteration, Sandcastle automatically captures the agent's session JSONL from the sandbox to the host at `~/.claude/projects/<encoded-path>/sessions/<session-id>.jsonl`. The `cwd` fields inside each JSONL entry are rewritten to match the host repo root, so `claude --resume` works natively.
+After each resumable provider iteration, Sandcastle automatically captures the agent's session file from the sandbox to the host. Claude Code sessions are stored under `~/.claude/projects/<encoded-path>/<session-id>.jsonl`; Codex sessions are stored under `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session-id>.jsonl`. Any provider-specific `cwd` fields are rewritten to match the host repo root, so the provider's native resume command works.
 
-Session capture is enabled by default for `claudeCode()` and can be opted out via `captureSessions: false`. Non-Claude agent providers never attempt capture. Capture failure fails the run.
+Session capture is enabled by default for `claudeCode()` and `codex()` and can be opted out via `captureSessions: false`. Providers without `sessionStorage` do not attempt capture. Capture failure fails the run.
 
 ### Session resume
 
-Pass `resumeSession` to `run()` to continue a prior Claude Code conversation inside a new sandbox:
+Pass `resumeSession` to `run()` to continue a prior Claude Code or Codex conversation inside a new sandbox:
 
 ```typescript
 const result = await run({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   sandbox: docker(),
   prompt: "Continue where you left off",
   resumeSession: "abc-123-def",
 });
 ```
 
-Before the sandbox starts, Sandcastle validates that the session file exists on the host and transfers it into the sandbox with `cwd` fields rewritten to match the sandbox-side path. The Claude Code agent receives `--resume <id>` on its print command for iteration 1.
+You can also continue the last captured session from a result:
+
+```typescript
+const first = await run({
+  agent: codex("gpt-5.4-mini"),
+  sandbox: docker(),
+  prompt: "Draft a plan",
+});
+
+const second = await first.resume?.("Now implement the plan");
+```
+
+`resume` is present only on results from resumable providers (Claude Code, Codex) — hence the optional-chaining call.
+
+Before the sandbox starts, Sandcastle validates that the session file exists on the host and transfers it into the sandbox with `cwd` fields rewritten to match the sandbox-side path. Claude Code receives `--resume <id>`; Codex receives `codex exec resume <id>` with the prompt piped over stdin.
 
 Constraints:
 
 - `resumeSession` is incompatible with `maxIterations > 1` (throws before sandbox creation).
-- The session file must exist at `~/.claude/projects/<encoded-path>/sessions/<id>.jsonl` (throws before sandbox creation).
+- The provider's host session file must exist (throws before sandbox creation).
 - Only iteration 1 receives the resume flag; subsequent iterations (if any) start fresh.
-- Non-Claude agent providers ignore `resumeSession`.
+- Providers without resume support reject `resumeSession`.
 
 ### `ClaudeCodeOptions`
 
 The `claudeCode()` factory accepts an optional second argument for provider-specific options:
 
 ```typescript
-agent: claudeCode("claude-opus-4-6", { effort: "high" });
+agent: claudeCode("claude-opus-4-7", { effort: "high" });
 ```
 
 | Option            | Type                                         | Default | Description                                               |
@@ -802,10 +846,11 @@ The `codex()` factory accepts an optional second argument for provider-specific 
 agent: codex("gpt-5.4", { effort: "high" });
 ```
 
-| Option   | Type                                           | Default | Description                                               |
-| -------- | ---------------------------------------------- | ------- | --------------------------------------------------------- |
-| `effort` | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Codex reasoning effort level via `model_reasoning_effort` |
-| `env`    | `Record<string, string>`                       | `{}`    | Environment variables injected by this agent provider     |
+| Option            | Type                                           | Default | Description                                               |
+| ----------------- | ---------------------------------------------- | ------- | --------------------------------------------------------- |
+| `effort`          | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Codex reasoning effort level via `model_reasoning_effort` |
+| `env`             | `Record<string, string>`                       | `{}`    | Environment variables injected by this agent provider     |
+| `captureSessions` | `boolean`                                      | `true`  | Capture Codex rollout JSONL to host for resume            |
 
 ### Provider `env`
 
@@ -813,7 +858,7 @@ Both **agent providers** and **sandbox providers** accept an optional `env: Reco
 
 ```typescript
 await run({
-  agent: claudeCode("claude-opus-4-6", {
+  agent: claudeCode("claude-opus-4-7", {
     env: { ANTHROPIC_API_KEY: "sk-ant-..." },
   }),
   sandbox: docker({
@@ -1094,19 +1139,19 @@ import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 // head — direct write, bind-mount only (default for bind-mount providers)
 await run({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   sandbox: docker(),
   prompt: "…",
 });
 // merge-to-head — temp branch, merge back (default for isolated providers)
 await run({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   sandbox: tempDir(),
   prompt: "…",
 });
 // branch — explicit named branch
 await run({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   sandbox: docker(),
   branchStrategy: { type: "branch", branch: "agent/fix-42" },
   prompt: "…",
@@ -1121,7 +1166,7 @@ Pass your custom provider via the `sandbox` option — it works the same as the 
 import { run, claudeCode } from "@ai-hero/sandcastle";
 
 const result = await run({
-  agent: claudeCode("claude-opus-4-6"),
+  agent: claudeCode("claude-opus-4-7"),
   sandbox: localProcess(), // your custom provider
   prompt: "Fix issue #42 in this repo.",
 });
@@ -1131,7 +1176,7 @@ const result = await run({
 
 For real-world examples, see:
 
-- [`src/sandboxes/docker.ts`](src/sandboxes/docker.ts) — bind-mount provider using Docker containers
+- [`src/sandboxes/docker.ts`](src/sandboxes/docker.ts) — bind-mount provider using Docker containers (with SELinux label support)
 - [`src/sandboxes/vercel.ts`](src/sandboxes/vercel.ts) — isolated provider using Vercel Firecracker microVMs via `@vercel/sandbox`
 - [`src/sandboxes/podman.ts`](src/sandboxes/podman.ts) — bind-mount provider using Podman containers (with SELinux label support)
 - [`src/sandboxes/test-isolated.ts`](src/sandboxes/test-isolated.ts) — isolated provider using temp directories (used in tests)

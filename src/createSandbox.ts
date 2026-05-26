@@ -12,7 +12,6 @@ import {
 import { resolveEnv } from "./EnvResolver.js";
 import { mergeProviderEnv } from "./mergeProviderEnv.js";
 import { orchestrate, type IterationResult } from "./Orchestrator.js";
-import { defaultSessionPathsLayer } from "./SessionPaths.js";
 import {
   callbackAgentStreamEmitterLayer,
   noopAgentStreamEmitterLayer,
@@ -43,6 +42,7 @@ import type {
   SandboxProvider,
   BindMountSandboxHandle,
   IsolatedSandboxHandle,
+  NoSandboxHandle,
 } from "./SandboxProvider.js";
 import { startSandbox } from "./startSandbox.js";
 import { syncOut } from "./syncOut.js";
@@ -85,7 +85,7 @@ export interface CreateSandboxOptions {
 }
 
 export interface SandboxRunOptions {
-  /** Agent provider to use (e.g. claudeCode("claude-opus-4-6")). */
+  /** Agent provider to use (e.g. claudeCode("claude-opus-4-7")). */
   readonly agent: AgentProvider;
   /** Inline prompt string (mutually exclusive with promptFile). */
   readonly prompt?: string;
@@ -129,7 +129,7 @@ export interface SandboxRunResult {
 }
 
 export interface SandboxInteractiveOptions {
-  /** Agent provider to use (e.g. claudeCode("claude-opus-4-6")). */
+  /** Agent provider to use (e.g. claudeCode("claude-opus-4-7")). */
   readonly agent: AgentProvider;
   /** Inline prompt string (mutually exclusive with promptFile). */
   readonly prompt?: string;
@@ -188,6 +188,7 @@ interface SandboxHandleContext {
   readonly providerHandle:
     | BindMountSandboxHandle
     | IsolatedSandboxHandle
+    | NoSandboxHandle
     | undefined;
   readonly applyToHost: () => Effect.Effect<void, any>;
 }
@@ -312,7 +313,6 @@ const buildSandboxHandle = (
       const runLayer = Layer.mergeAll(
         reuseFactoryLayer,
         runDisplayLayer,
-        defaultSessionPathsLayer,
         agentStreamEmitterLayer,
       );
 
@@ -528,7 +528,12 @@ export const createSandboxFromWorktree = async (
     options.sandbox.tag !== "isolated"
   ) {
     await Effect.runPromise(
-      copyToWorktree(options.copyToWorktree, hostRepoDir, worktreePath, options.timeouts?.copyToWorktreeMs),
+      copyToWorktree(
+        options.copyToWorktree,
+        hostRepoDir,
+        worktreePath,
+        options.timeouts?.copyToWorktreeMs,
+      ),
     );
   }
 
@@ -536,6 +541,7 @@ export const createSandboxFromWorktree = async (
   let providerHandle:
     | BindMountSandboxHandle
     | IsolatedSandboxHandle
+    | NoSandboxHandle
     | undefined;
   let sandboxLayer: Layer.Layer<SandboxTag>;
   let sandboxRepoDir: string;
@@ -564,6 +570,13 @@ export const createSandboxFromWorktree = async (
         env,
         copyPaths: options.copyToWorktree,
       });
+    } else if (provider.tag === "none") {
+      startEffect = startSandbox({
+        provider,
+        hostRepoDir,
+        env,
+        worktreeOrRepoPath: worktreePath,
+      });
     } else {
       startEffect = resolveGitMounts(join(hostRepoDir, ".git")).pipe(
         Effect.provide(NodeFileSystem.layer),
@@ -572,7 +585,11 @@ export const createSandboxFromWorktree = async (
         Effect.flatMap((gitMounts) =>
           Effect.tryPromise({
             try: () =>
-              patchGitMountsForWindows(gitMounts, worktreePath, SANDBOX_REPO_DIR),
+              patchGitMountsForWindows(
+                gitMounts,
+                worktreePath,
+                SANDBOX_REPO_DIR,
+              ),
             catch: (e) =>
               new Error(
                 `Failed to patch git mounts: ${e instanceof Error ? e.message : String(e)}`,
@@ -693,7 +710,12 @@ export const createSandbox = async (
     options.sandbox.tag !== "isolated"
   ) {
     await Effect.runPromise(
-      copyToWorktree(options.copyToWorktree, hostRepoDir, worktreePath, options.timeouts?.copyToWorktreeMs),
+      copyToWorktree(
+        options.copyToWorktree,
+        hostRepoDir,
+        worktreePath,
+        options.timeouts?.copyToWorktreeMs,
+      ),
     );
   }
 
@@ -708,6 +730,7 @@ export const createSandbox = async (
   let providerHandle:
     | BindMountSandboxHandle
     | IsolatedSandboxHandle
+    | NoSandboxHandle
     | undefined;
   let sandboxLayer: Layer.Layer<SandboxTag>;
   let sandboxRepoDir: string;
@@ -737,6 +760,13 @@ export const createSandbox = async (
         env,
         copyPaths: options.copyToWorktree,
       });
+    } else if (provider.tag === "none") {
+      startEffect = startSandbox({
+        provider,
+        hostRepoDir,
+        env,
+        worktreeOrRepoPath: worktreePath,
+      });
     } else {
       startEffect = resolveGitMounts(join(hostRepoDir, ".git")).pipe(
         Effect.provide(NodeFileSystem.layer),
@@ -745,7 +775,11 @@ export const createSandbox = async (
         Effect.flatMap((gitMounts) =>
           Effect.tryPromise({
             try: () =>
-              patchGitMountsForWindows(gitMounts, worktreePath, SANDBOX_REPO_DIR),
+              patchGitMountsForWindows(
+                gitMounts,
+                worktreePath,
+                SANDBOX_REPO_DIR,
+              ),
             catch: (e) =>
               new Error(
                 `Failed to patch git mounts: ${e instanceof Error ? e.message : String(e)}`,

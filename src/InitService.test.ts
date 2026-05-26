@@ -29,7 +29,7 @@ const opencodeAgent = getAgent("opencode")!;
 
 const defaultOptions: ScaffoldOptions = {
   agent: claudeCodeAgent,
-  model: "claude-opus-4-6",
+  model: "claude-opus-4-7",
 };
 
 const runScaffold = (repoDir: string, options?: Partial<ScaffoldOptions>) =>
@@ -53,7 +53,7 @@ describe("Agent registry", () => {
     const agent = getAgent("claude-code");
     expect(agent).toBeDefined();
     expect(agent!.name).toBe("claude-code");
-    expect(agent!.defaultModel).toBe("claude-opus-4-6");
+    expect(agent!.defaultModel).toBe("claude-opus-4-7");
     expect(agent!.factoryImport).toBe("claudeCode");
     expect(agent!.dockerfileTemplate).toContain("FROM");
   });
@@ -208,6 +208,11 @@ describe("InitService scaffold", () => {
       "utf-8",
     );
     expect(envExample).toContain("GH_TOKEN=");
+    expect(envExample).toContain(
+      "https://github.com/settings/personal-access-tokens/new",
+    );
+    expect(envExample).toContain("Issues");
+    expect(envExample).toContain("Metadata");
   });
 
   it("generates .env.example without GH_TOKEN when backlog manager is beads", async () => {
@@ -357,7 +362,7 @@ describe("InitService scaffold", () => {
     );
     expect(mainTs).toContain('claudeCode("claude-sonnet-4-6")');
     // Should not contain the template's original model
-    expect(mainTs).not.toContain('claudeCode("claude-opus-4-6")');
+    expect(mainTs).not.toContain('claudeCode("claude-opus-4-7")');
   });
 
   it("scaffolds main.mts with default model when using agent default", async () => {
@@ -368,7 +373,7 @@ describe("InitService scaffold", () => {
       join(dir, ".sandcastle", "main.mts"),
       "utf-8",
     );
-    expect(mainTs).toContain('claudeCode("claude-opus-4-6")');
+    expect(mainTs).toContain('claudeCode("claude-opus-4-7")');
   });
 
   // --- Template-specific tests ---
@@ -406,7 +411,7 @@ describe("InitService scaffold", () => {
     expect(mainTs).toContain("run(");
     expect(mainTs).toContain("maxIterations");
     expect(mainTs).toContain("3");
-    // When scaffolded with default model, simple-loop uses claude-opus-4-6
+    // When scaffolded with default model, simple-loop uses claude-opus-4-7
     // (rewritten from template's claude-sonnet-4-6)
     expect(mainTs).toContain("promptFile");
     expect(mainTs).toContain("npm install");
@@ -906,8 +911,8 @@ describe("InitService scaffold", () => {
         join(dir, ".sandcastle", "main.mts"),
         "utf-8",
       );
-      // All factory calls should use the specified model (default: claude-opus-4-6)
-      expect(mainTs).toContain("claude-opus-4-6");
+      // All factory calls should use the specified model (default: claude-opus-4-7)
+      expect(mainTs).toContain("claude-opus-4-7");
     });
 
     it("implement-prompt.md contains {{TASK_ID}}, {{ISSUE_TITLE}}, {{BRANCH}} prompt arguments", async () => {
@@ -1159,7 +1164,7 @@ describe("InitService scaffold", () => {
         join(dir, ".sandcastle", "main.mts"),
         "utf-8",
       );
-      expect(mainTs).toContain("claude-opus-4-6");
+      expect(mainTs).toContain("claude-opus-4-7");
     });
 
     it("scaffolds CODING_STANDARDS.md with minimal starter content", async () => {
@@ -1218,6 +1223,7 @@ describe("InitService scaffold", () => {
       );
       expect(manager!.templateArgs.LIST_TASKS_COMMAND).toContain("labels");
       expect(manager!.templateArgs.LIST_TASKS_COMMAND).toContain("comments");
+      expect(manager!.templateArgs.LIST_TASKS_COMMAND).toContain("--limit 100");
       expect(manager!.templateArgs.VIEW_TASK_COMMAND).toContain(
         "gh issue view",
       );
@@ -1903,7 +1909,7 @@ describe("InitService scaffold", () => {
         "utf-8",
       );
       expect(mainContent).toContain("@ai-hero/sandcastle");
-      expect(mainContent).toContain('claudeCode("claude-opus-4-6")');
+      expect(mainContent).toContain('claudeCode("claude-opus-4-7")');
     });
 
     it("main.ts scaffolded with type: module rewrites agent factory correctly", async () => {
@@ -1997,6 +2003,54 @@ describe("InitService scaffold", () => {
       await expect(
         access(join(dir, ".sandcastle", "Containerfile")),
       ).rejects.toThrow();
+    });
+
+    it("selecting podman rewrites the main file to import and call podman", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, { sandboxProvider: podmanProvider });
+
+      const mainTs = await readFile(
+        join(dir, ".sandcastle", "main.mts"),
+        "utf-8",
+      );
+      expect(mainTs).toContain(
+        'import { podman } from "@ai-hero/sandcastle/sandboxes/podman"',
+      );
+      expect(mainTs).toContain("sandbox: podman()");
+      expect(mainTs).not.toContain("docker");
+    });
+
+    it("selecting podman rewrites every docker() call site", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        sandboxProvider: podmanProvider,
+        templateName: "parallel-planner",
+      });
+
+      const mainTs = await readFile(
+        join(dir, ".sandcastle", "main.mts"),
+        "utf-8",
+      );
+      expect(mainTs).not.toContain("docker");
+      // parallel-planner calls the factory three times
+      expect(mainTs.match(/sandbox: podman\(\)/g)).toHaveLength(3);
+    });
+
+    it("selecting docker leaves the main file importing and calling docker", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, { sandboxProvider: dockerProvider });
+
+      const mainTs = await readFile(
+        join(dir, ".sandcastle", "main.mts"),
+        "utf-8",
+      );
+      expect(mainTs).toContain(
+        'import { run, claudeCode } from "@ai-hero/sandcastle"',
+      );
+      expect(mainTs).toContain(
+        'import { docker } from "@ai-hero/sandcastle/sandboxes/docker"',
+      );
+      expect(mainTs).toContain("sandbox: docker()");
     });
   });
 });

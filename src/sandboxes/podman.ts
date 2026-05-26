@@ -3,7 +3,7 @@
  *
  * Usage:
  *   import { podman } from "sandcastle/sandboxes/podman";
- *   await run({ agent: claudeCode("claude-opus-4-6"), sandbox: podman() });
+ *   await run({ agent: claudeCode("claude-opus-4-7"), sandbox: podman() });
  */
 
 import {
@@ -23,7 +23,13 @@ import {
   type InteractiveExecOptions,
 } from "../SandboxProvider.js";
 import type { MountConfig } from "../MountConfig.js";
-import { defaultImageName, resolveUserMounts } from "../mountUtils.js";
+import type { SelinuxLabel } from "../mountUtils.js";
+import {
+  defaultImageName,
+  resolveUserMounts,
+  formatVolumeMount,
+  processFileMountParents,
+} from "../mountUtils.js";
 
 export interface PodmanOptions {
   /** Podman image name (default: derived from repo directory name). */
@@ -35,7 +41,7 @@ export interface PodmanOptions {
    * - `"Z"` — private label; only this container can access the mount.
    * - `false` — disable labeling entirely.
    */
-  readonly selinuxLabel?: "z" | "Z" | false;
+  readonly selinuxLabel?: SelinuxLabel;
   /**
    * User namespace mode for rootless Podman.
    *
@@ -77,6 +83,30 @@ export interface PodmanOptions {
    * When omitted, Podman's default network is used.
    */
   readonly network?: string | readonly string[];
+  /**
+   * Supplementary groups to add the container user to, via `--group-add`.
+   *
+   * Accepts group names or numeric GIDs:
+   *
+   * - `["docker"]` → `--group-add docker`
+   * - `[999]` → `--group-add 999`
+   * - `["docker", 999]` → `--group-add docker --group-add 999`
+   *
+   * Useful for granting access to a bind-mounted Docker socket (Docker-outside-of-Docker).
+   * When omitted, no `--group-add` flags are added.
+   */
+  readonly groups?: readonly (string | number)[];
+  /**
+   * Limit the CPU resources available to the container, via `--cpus`.
+   *
+   * Maps directly to `podman run --cpus`. Accepts fractional values:
+   *
+   * - `2` → `--cpus 2` (at most 2 CPUs)
+   * - `1.5` → `--cpus 1.5` (at most 1.5 CPUs)
+   *
+   * When omitted, no `--cpus` flag is added and the container is unconstrained.
+   */
+  readonly cpus?: number;
 }
 
 /**
@@ -97,6 +127,12 @@ export const podman = (options?: PodmanOptions): SandboxProvider => {
   const userMounts = options?.mounts
     ? resolveUserMounts(options.mounts, sandboxHomedir)
     : [];
+  // Validate file mounts and collect parent dirs to create at container start.
+  // Throws at construction time if any file mount parent is outside sandboxHomedir.
+  const parentDirsToCreate = processFileMountParents(
+    userMounts,
+    sandboxHomedir,
+  );
 
   return createBindMountSandboxProvider({
     name: "podman",
@@ -146,6 +182,12 @@ export const podman = (options?: PodmanOptions): SandboxProvider => {
           : [options.network]
         : [];
       const networkArgs = networks.flatMap((n) => ["--network", n]);
+      const groupArgs = (options?.groups ?? []).flatMap((g) => [
+        "--group-add",
+        String(g),
+      ]);
+      const cpusArgs =
+        options?.cpus !== undefined ? ["--cpus", String(options.cpus)] : [];
 
       // Start container via podman run
       await new Promise<void>((resolve, reject) => {
@@ -159,6 +201,8 @@ export const podman = (options?: PodmanOptions): SandboxProvider => {
             ...userArgs,
             ...usernsArgs,
             ...networkArgs,
+            ...groupArgs,
+            ...cpusArgs,
             "-w",
             worktreePath,
             ...envArgs,
@@ -177,6 +221,38 @@ export const podman = (options?: PodmanOptions): SandboxProvider => {
           },
         );
       });
+
+      // Create parent directories for file mounts and chown to the container user
+      for (const dir of parentDirsToCreate) {
+        await new Promise<void>((resolve, reject) => {
+          execFile(
+            "podman",
+            [
+              "exec",
+              "--user",
+              "0:0",
+              containerName,
+              "sh",
+              "-c",
+              `mkdir -p "$1" && chown "$2" "$1"`,
+              "sh",
+              dir,
+              `${containerUid}:${containerGid}`,
+            ],
+            (error) => {
+              if (error) {
+                reject(
+                  new Error(
+                    `Failed to create parent directory '${dir}' in container: ${error.message}`,
+                  ),
+                );
+              } else {
+                resolve();
+              }
+            },
+          );
+        });
+      }
 
       // Set up signal handlers for cleanup
       const onExit = () => {
@@ -394,15 +470,3 @@ const checkPodmanMachine = (): Promise<void> =>
       },
     );
   });
-
-const formatVolumeMount = (
-  mount: { hostPath: string; sandboxPath: string; readonly?: boolean },
-  selinuxLabel: PodmanOptions["selinuxLabel"],
-): string => {
-  const base = `${mount.hostPath}:${mount.sandboxPath}`;
-  const options = [mount.readonly ? "ro" : undefined, selinuxLabel || undefined]
-    .filter((option): option is string => option !== undefined)
-    .join(",");
-
-  return options ? `${base}:${options}` : base;
-};

@@ -9,11 +9,11 @@ await run({
   // A name for this run, shown as a prefix in log output.
   name: "worker",
 
-  // Sandbox provider — Docker is the default runtime.
+  // Sandbox provider — runs the agent inside an isolated container.
   sandbox: docker(),
 
   // The agent provider. Pass a model string to claudeCode() — sonnet balances
-  // capability and speed for most tasks. Switch to claude-opus-4-6 for harder
+  // capability and speed for most tasks. Switch to claude-opus-4-7 for harder
   // problems, or claude-haiku-4-5-20251001 for speed.
   agent: claudeCode("claude-sonnet-4-6"),
 

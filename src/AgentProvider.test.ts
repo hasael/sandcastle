@@ -10,12 +10,12 @@ const opts = (prompt: string): AgentCommandOptions => ({
 
 describe("claudeCode factory", () => {
   it("returns a provider with name 'claude-code'", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     expect(provider.name).toBe("claude-code");
   });
 
   it("does not expose envManifest or dockerfileTemplate", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     expect(provider).not.toHaveProperty("envManifest");
     expect(provider).not.toHaveProperty("dockerfileTemplate");
   });
@@ -29,7 +29,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand delivers prompt via stdin, not argv", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const { command, stdin } = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("-p -");
     expect(command).not.toContain("'do something'");
@@ -37,13 +37,13 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand shell-escapes the model", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const { command } = provider.buildPrintCommand(opts("do something"));
-    expect(command).toContain("--model 'claude-opus-4-6'");
+    expect(command).toContain("--model 'claude-opus-4-7'");
   });
 
   it("parseStreamLine extracts text from assistant message", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const line = JSON.stringify({
       type: "assistant",
       message: { content: [{ type: "text", text: "Hello world" }] },
@@ -54,7 +54,7 @@ describe("claudeCode factory", () => {
   });
 
   it("parseStreamLine extracts result from result message", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const line = JSON.stringify({
       type: "result",
       result: "Final answer <promise>COMPLETE</promise>",
@@ -68,13 +68,13 @@ describe("claudeCode factory", () => {
   });
 
   it("parseStreamLine returns empty array for non-JSON lines", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     expect(provider.parseStreamLine("not json")).toEqual([]);
     expect(provider.parseStreamLine("")).toEqual([]);
   });
 
   it("parseStreamLine extracts tool_use block (Bash → command arg)", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const line = JSON.stringify({
       type: "assistant",
       message: {
@@ -103,26 +103,26 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand includes --effort when specified", () => {
-    const provider = claudeCode("claude-opus-4-6", { effort: "high" });
+    const provider = claudeCode("claude-opus-4-7", { effort: "high" });
     const { command } = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("--effort high");
   });
 
   it("buildPrintCommand omits --effort when not specified", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const { command } = provider.buildPrintCommand(opts("do something"));
     expect(command).not.toContain("--effort");
   });
 
   it("buildPrintCommand omits --effort when options is empty", () => {
-    const provider = claudeCode("claude-opus-4-6", {});
+    const provider = claudeCode("claude-opus-4-7", {});
     const { command } = provider.buildPrintCommand(opts("do something"));
     expect(command).not.toContain("--effort");
   });
 
   it("supports all effort levels", () => {
     for (const effort of ["low", "medium", "high", "max"] as const) {
-      const provider = claudeCode("claude-opus-4-6", { effort });
+      const provider = claudeCode("claude-opus-4-7", { effort });
       expect(provider.buildPrintCommand(opts("test")).command).toContain(
         `--effort ${effort}`,
       );
@@ -130,21 +130,21 @@ describe("claudeCode factory", () => {
   });
 
   it("accepts an env option and exposes it on the provider", () => {
-    const provider = claudeCode("claude-opus-4-6", {
+    const provider = claudeCode("claude-opus-4-7", {
       env: { ANTHROPIC_API_KEY: "sk-test" },
     });
     expect(provider.env).toEqual({ ANTHROPIC_API_KEY: "sk-test" });
   });
 
   it("defaults env to empty object when not provided", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     expect(provider.env).toEqual({});
   });
 
   // --- dangerouslySkipPermissions conditional tests ---
 
   it("buildPrintCommand includes --dangerously-skip-permissions when true", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: true,
@@ -153,7 +153,7 @@ describe("claudeCode factory", () => {
   });
 
   it("parseStreamLine emits session_id from Claude Code init line", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const line = JSON.stringify({
       type: "system",
       subtype: "init",
@@ -165,7 +165,7 @@ describe("claudeCode factory", () => {
   });
 
   it("parseStreamLine ignores system events without subtype init", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const line = JSON.stringify({
       type: "system",
       subtype: "other",
@@ -175,7 +175,7 @@ describe("claudeCode factory", () => {
   });
 
   it("parseStreamLine ignores system init without session_id", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const line = JSON.stringify({
       type: "system",
       subtype: "init",
@@ -184,7 +184,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand includes --resume when resumeSession is set", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: true,
@@ -194,7 +194,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand omits --resume when resumeSession is not set", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: true,
@@ -203,7 +203,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand omits --dangerously-skip-permissions when false", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: false,
@@ -212,7 +212,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildInteractiveArgs includes --dangerously-skip-permissions when true", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const args = provider.buildInteractiveArgs!({
       prompt: "test",
       dangerouslySkipPermissions: true,
@@ -221,7 +221,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildInteractiveArgs omits --dangerously-skip-permissions when false", () => {
-    const provider = claudeCode("claude-opus-4-6");
+    const provider = claudeCode("claude-opus-4-7");
     const args = provider.buildInteractiveArgs!({
       prompt: "test",
       dangerouslySkipPermissions: false,
@@ -510,6 +510,21 @@ describe("codex factory", () => {
     expect(command).toContain(`-c 'model_reasoning_effort="high"'`);
   });
 
+  it("buildPrintCommand resumes with stdin prompt when resumeSession is set", () => {
+    const provider = codex("gpt-5.4-mini", { effort: "high" });
+    const { command, stdin } = provider.buildPrintCommand({
+      prompt: "continue",
+      dangerouslySkipPermissions: true,
+      resumeSession: "abc-123",
+    });
+    expect(command).toContain("codex exec resume 'abc-123'");
+    expect(command).toContain("--json");
+    expect(command).toContain("-m 'gpt-5.4-mini'");
+    expect(command).toContain(`-c 'model_reasoning_effort="high"'`);
+    expect(command.endsWith(" -")).toBe(true);
+    expect(stdin).toBe("continue");
+  });
+
   it("buildPrintCommand omits model reasoning effort config when not specified", () => {
     const provider = codex("gpt-5.4-mini");
     const { command } = provider.buildPrintCommand(opts("do something"));
@@ -524,6 +539,21 @@ describe("codex factory", () => {
       );
     }
   });
+
+  it("parseStreamLine extracts session id from thread.started", () => {
+    const provider = codex("gpt-5.4-mini");
+    const line = JSON.stringify({
+      type: "thread.started",
+      thread_id: "9ba1c695-2222-4444-8888-e7e847bf34dd",
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      {
+        type: "session_id",
+        sessionId: "9ba1c695-2222-4444-8888-e7e847bf34dd",
+      },
+    ]);
+  });
+
   it("parseStreamLine extracts text and result from item.completed agent_message", () => {
     const provider = codex("gpt-5.4-mini");
     const line = JSON.stringify({
@@ -905,18 +935,169 @@ describe("opencode factory", () => {
     expect(command).toContain("--model 'opencode/big-pickle'");
   });
 
-  it("parseStreamLine returns empty array for all input (raw passthrough)", () => {
+  it("buildPrintCommand includes --variant when specified", () => {
+    const provider = opencode("opencode/big-pickle", { variant: "high" });
+    const { command } = provider.buildPrintCommand(opts("do something"));
+    expect(command).toContain("--variant 'high'");
+  });
+
+  it("buildPrintCommand omits --variant when not specified", () => {
     const provider = opencode("opencode/big-pickle");
-    expect(provider.parseStreamLine("some output text")).toEqual([]);
-    expect(provider.parseStreamLine("")).toEqual([]);
-    expect(
-      provider.parseStreamLine(JSON.stringify({ type: "text", text: "hi" })),
-    ).toEqual([]);
+    const { command } = provider.buildPrintCommand(opts("do something"));
+    expect(command).not.toContain("--variant");
+  });
+
+  it("buildPrintCommand omits --variant when options is empty", () => {
+    const provider = opencode("opencode/big-pickle", {});
+    const { command } = provider.buildPrintCommand(opts("do something"));
+    expect(command).not.toContain("--variant");
+  });
+
+  it("passes through arbitrary variant values to the CLI flag", () => {
+    for (const variant of ["low", "high", "max", "minimal", "custom-value"]) {
+      const provider = opencode("opencode/big-pickle", { variant });
+      expect(provider.buildPrintCommand(opts("test")).command).toContain(
+        "--variant",
+      );
+    }
+  });
+
+  it("buildPrintCommand shell-escapes the variant value", () => {
+    const provider = opencode("opencode/big-pickle", {
+      variant: "it's tricky",
+    });
+    const { command } = provider.buildPrintCommand(opts("test"));
+    expect(command).toContain("--variant 'it'\\''s tricky'");
+  });
+
+  it("parseStreamLine extracts session id from step_start", () => {
+    const provider = opencode("opencode/big-pickle");
+    const line = JSON.stringify({
+      type: "step_start",
+      sessionID: "ses_19cb8236effe4lu1aSmQyzbeP2",
+      part: {
+        type: "step-start",
+        sessionID: "ses_19cb8236effe4lu1aSmQyzbeP2",
+      },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "session_id", sessionId: "ses_19cb8236effe4lu1aSmQyzbeP2" },
+    ]);
+  });
+
+  it("parseStreamLine extracts text and result from a text event", () => {
+    const provider = opencode("opencode/big-pickle");
+    const line = JSON.stringify({
+      type: "text",
+      sessionID: "ses_abc",
+      part: { type: "text", text: "Hello world <promise>COMPLETE</promise>" },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "text", text: "Hello world <promise>COMPLETE</promise>" },
+      { type: "result", result: "Hello world <promise>COMPLETE</promise>" },
+    ]);
+  });
+
+  it("parseStreamLine extracts tool call from tool_use (bash → command)", () => {
+    const provider = opencode("opencode/big-pickle");
+    const line = JSON.stringify({
+      type: "tool_use",
+      sessionID: "ses_abc",
+      part: {
+        type: "tool",
+        tool: "bash",
+        callID: "call_00",
+        state: { status: "completed", input: { command: "npm test" } },
+      },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "tool_call", name: "bash", args: "npm test" },
+    ]);
+  });
+
+  it("parseStreamLine extracts tool call from tool_use (webfetch → url)", () => {
+    const provider = opencode("opencode/big-pickle");
+    const line = JSON.stringify({
+      type: "tool_use",
+      sessionID: "ses_abc",
+      part: {
+        type: "tool",
+        tool: "webfetch",
+        state: { status: "completed", input: { url: "https://example.com" } },
+      },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "tool_call", name: "webfetch", args: "https://example.com" },
+    ]);
+  });
+
+  it("parseStreamLine extracts tool call from tool_use (task → description)", () => {
+    const provider = opencode("opencode/big-pickle");
+    const line = JSON.stringify({
+      type: "tool_use",
+      sessionID: "ses_abc",
+      part: {
+        type: "tool",
+        tool: "task",
+        state: {
+          status: "completed",
+          input: { description: "Explore the repo" },
+        },
+      },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "tool_call", name: "task", args: "Explore the repo" },
+    ]);
+  });
+
+  it("parseStreamLine skips non-allowlisted tools (read)", () => {
+    const provider = opencode("opencode/big-pickle");
+    const line = JSON.stringify({
+      type: "tool_use",
+      sessionID: "ses_abc",
+      part: {
+        type: "tool",
+        tool: "read",
+        state: { status: "completed", input: { filePath: "/some/file" } },
+      },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([]);
+  });
+
+  it("parseStreamLine skips tool_use with a missing arg field", () => {
+    const provider = opencode("opencode/big-pickle");
+    const line = JSON.stringify({
+      type: "tool_use",
+      sessionID: "ses_abc",
+      part: {
+        type: "tool",
+        tool: "bash",
+        state: { status: "completed", input: { description: "no command" } },
+      },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([]);
+  });
+
+  it("parseStreamLine skips step_finish events", () => {
+    const provider = opencode("opencode/big-pickle");
+    const line = JSON.stringify({
+      type: "step_finish",
+      sessionID: "ses_abc",
+      part: { type: "step-finish", tokens: { total: 100 } },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([]);
+  });
+
+  it("parseStreamLine returns empty array for unrecognized event types", () => {
+    const provider = opencode("opencode/big-pickle");
+    const line = JSON.stringify({ type: "unknown_event", data: "foo" });
+    expect(provider.parseStreamLine(line)).toEqual([]);
   });
 
   it("parseStreamLine returns empty array for non-JSON lines", () => {
     const provider = opencode("opencode/big-pickle");
     expect(provider.parseStreamLine("not json")).toEqual([]);
+    expect(provider.parseStreamLine("")).toEqual([]);
   });
 
   it("parseStreamLine returns empty array for malformed JSON", () => {
@@ -963,15 +1144,14 @@ describe("resumeSession on non-Claude providers", () => {
     expect(command).not.toContain("abc-123");
   });
 
-  it("codex ignores resumeSession in buildPrintCommand", () => {
+  it("codex uses resumeSession in buildPrintCommand", () => {
     const provider = codex("gpt-5.4-mini");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: true,
       resumeSession: "abc-123",
     });
-    expect(command).not.toContain("--resume");
-    expect(command).not.toContain("abc-123");
+    expect(command).toContain("codex exec resume 'abc-123'");
   });
 
   it("opencode ignores resumeSession in buildPrintCommand", () => {
@@ -997,14 +1177,14 @@ describe("resumeSession on non-Claude providers", () => {
 });
 
 describe("parseSessionUsage (Claude Code)", () => {
-  const provider = claudeCode("claude-opus-4-6");
+  const provider = claudeCode("claude-opus-4-7");
 
   it("extracts usage from the last assistant message in a JSONL string", () => {
     const content = [
       JSON.stringify({
         type: "assistant",
         message: {
-          model: "claude-opus-4-6",
+          model: "claude-opus-4-7",
           usage: {
             input_tokens: 100,
             cache_creation_input_tokens: 200,
@@ -1016,7 +1196,7 @@ describe("parseSessionUsage (Claude Code)", () => {
       JSON.stringify({
         type: "assistant",
         message: {
-          model: "claude-opus-4-6",
+          model: "claude-opus-4-7",
           usage: {
             input_tokens: 3,
             cache_creation_input_tokens: 9294,
@@ -1051,7 +1231,7 @@ describe("parseSessionUsage (Claude Code)", () => {
     const content = JSON.stringify({
       type: "assistant",
       message: {
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-7",
         content: [{ type: "text", text: "hi" }],
       },
     });
@@ -1069,7 +1249,7 @@ describe("parseSessionUsage (Claude Code)", () => {
       JSON.stringify({
         type: "assistant",
         message: {
-          model: "claude-opus-4-6",
+          model: "claude-opus-4-7",
           usage: {
             input_tokens: 10,
             cache_creation_input_tokens: 20,
@@ -1107,12 +1287,12 @@ describe("parseSessionUsage (Claude Code)", () => {
 
 describe("captureSessions flag", () => {
   it("claudeCode defaults captureSessions to true", () => {
-    expect(claudeCode("claude-opus-4-6").captureSessions).toBe(true);
+    expect(claudeCode("claude-opus-4-7").captureSessions).toBe(true);
   });
 
   it("claudeCode allows opting out of captureSessions", () => {
     expect(
-      claudeCode("claude-opus-4-6", { captureSessions: false }).captureSessions,
+      claudeCode("claude-opus-4-7", { captureSessions: false }).captureSessions,
     ).toBe(false);
   });
 
@@ -1120,8 +1300,14 @@ describe("captureSessions flag", () => {
     expect(pi("pi-model").captureSessions).toBe(false);
   });
 
-  it("codex has captureSessions false", () => {
-    expect(codex("codex-model").captureSessions).toBe(false);
+  it("codex defaults captureSessions to true", () => {
+    expect(codex("codex-model").captureSessions).toBe(true);
+  });
+
+  it("codex allows opting out of captureSessions", () => {
+    expect(
+      codex("codex-model", { captureSessions: false }).captureSessions,
+    ).toBe(false);
   });
 
   it("opencode has captureSessions false", () => {

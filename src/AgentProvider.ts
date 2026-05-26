@@ -1,3 +1,15 @@
+import {
+  codexHostSessionStore,
+  codexSandboxSessionStore,
+  hostSessionStore,
+  sandboxSessionStore,
+  transferClaudeSession,
+  transferCodexSession,
+  type LocatableSessionStore,
+  type SessionStore,
+} from "./SessionStore.js";
+import type { BindMountSandboxHandle } from "./SandboxProvider.js";
+
 export type ParsedStreamEvent =
   | { type: "text"; text: string }
   | { type: "result"; result: string }
@@ -21,7 +33,11 @@ const TOOL_ARG_FIELDS: Record<string, string> = {
 const extractErrorMessage = (obj: any): string | undefined => {
   const err = obj.error;
   if (typeof err === "string") return err;
-  if (typeof err === "object" && err !== null && typeof err.message === "string") {
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    typeof err.message === "string"
+  ) {
     return err.message;
   }
   if (typeof obj.message === "string") return obj.message;
@@ -187,12 +203,20 @@ export interface IterationUsage {
   readonly outputTokens: number;
 }
 
+export interface AgentSessionStorage {
+  hostStore(cwd: string): SessionStore;
+  sandboxStore(cwd: string, handle: BindMountSandboxHandle): SessionStore;
+  transfer(from: SessionStore, to: SessionStore, id: string): Promise<void>;
+}
+
 export interface AgentProvider {
   readonly name: string;
   /** Environment variables injected by this agent provider. Merged at launch time with env resolver and sandbox provider env. */
   readonly env: Record<string, string>;
   /** When true, session capture is enabled for this provider. Default: true for Claude Code, false for others. */
   readonly captureSessions: boolean;
+  /** Provider-owned storage and transfer behavior for resumable agent sessions. */
+  readonly sessionStorage?: AgentSessionStorage;
   buildPrintCommand(options: AgentCommandOptions): PrintCommand;
   buildInteractiveArgs?(options: AgentCommandOptions): string[];
   parseStreamLine(line: string): ParsedStreamEvent[];
@@ -200,7 +224,7 @@ export interface AgentProvider {
   parseSessionUsage?(content: string): IterationUsage | undefined;
 }
 
-export const DEFAULT_MODEL = "claude-opus-4-6";
+export const DEFAULT_MODEL = "claude-opus-4-7";
 
 // ---------------------------------------------------------------------------
 // Pi agent provider
@@ -304,6 +328,10 @@ const parseCodexStreamLine = (line: string): ParsedStreamEvent[] => {
   try {
     const obj = JSON.parse(line);
 
+    if (obj.type === "thread.started" && typeof obj.thread_id === "string") {
+      return [{ type: "session_id", sessionId: obj.thread_id }];
+    }
+
     // item.completed with agent_message → text + result
     if (
       obj.type === "item.completed" &&
@@ -346,22 +374,54 @@ export interface CodexOptions {
   readonly effort?: "low" | "medium" | "high" | "xhigh";
   /** Environment variables injected by this agent provider. */
   readonly env?: Record<string, string>;
+  /** When false, session capture is disabled. Default: true. */
+  readonly captureSessions?: boolean;
+  /** Override Codex session directories for tests or non-standard installs. */
+  readonly sessionStorage?: {
+    readonly hostSessionsDir?: string;
+    readonly sandboxSessionsDir?: string;
+  };
 }
 
 export const codex = (
   model: string,
   options?: CodexOptions,
-): AgentProvider => ({
+): AgentProvider & { readonly sessionStorage: AgentSessionStorage } => ({
   name: "codex",
   env: options?.env ?? {},
-  captureSessions: false,
+  captureSessions: options?.captureSessions ?? true,
+  sessionStorage: {
+    hostStore: (cwd) =>
+      codexHostSessionStore(cwd, options?.sessionStorage?.hostSessionsDir),
+    sandboxStore: (cwd, handle) =>
+      codexSandboxSessionStore(
+        cwd,
+        handle,
+        options?.sessionStorage?.sandboxSessionsDir,
+      ),
+    // Both stores above are LocatableSessionStore by construction; the
+    // AgentSessionStorage seam types them as the narrower SessionStore.
+    transfer: (from, to, id) =>
+      transferCodexSession(
+        from as LocatableSessionStore,
+        to as LocatableSessionStore,
+        id,
+      ),
+  },
 
-  buildPrintCommand({ prompt }: AgentCommandOptions): PrintCommand {
+  buildPrintCommand({
+    prompt,
+    resumeSession,
+  }: AgentCommandOptions): PrintCommand {
     const effortFlag = options?.effort
       ? ` -c ${shellEscape(`model_reasoning_effort="${options.effort}"`)}`
       : "";
+    const base = resumeSession
+      ? `codex exec resume ${shellEscape(resumeSession)}`
+      : "codex exec";
+    const stdinArg = resumeSession ? " -" : "";
     return {
-      command: `codex exec --json --dangerously-bypass-approvals-and-sandbox -m ${shellEscape(model)}${effortFlag}`,
+      command: `${base} --json --dangerously-bypass-approvals-and-sandbox -m ${shellEscape(model)}${effortFlag}${stdinArg}`,
       stdin: prompt,
     };
   },
@@ -430,8 +490,61 @@ export const cursor = (
 // OpenCode agent provider
 // ---------------------------------------------------------------------------
 
+/** Maps allowlisted OpenCode tool names to the input field containing the
+ *  display arg. The tool name is surfaced as-is (OpenCode's lowercase names). */
+const OPENCODE_TOOL_ARG_FIELDS: Record<string, string> = {
+  bash: "command",
+  webfetch: "url",
+  task: "description",
+};
+
+const parseOpenCodeStreamLine = (line: string): ParsedStreamEvent[] => {
+  if (!line.startsWith("{")) return [];
+  try {
+    const obj = JSON.parse(line);
+    const part = obj.part;
+
+    // step_start carries the session ID for the run.
+    if (obj.type === "step_start" && typeof obj.sessionID === "string") {
+      return [{ type: "session_id", sessionId: obj.sessionID }];
+    }
+
+    // text event → assistant text. Emit both text (for streaming display) and
+    // result (final message; the last result wins in the Orchestrator).
+    if (
+      obj.type === "text" &&
+      part?.type === "text" &&
+      typeof part.text === "string"
+    ) {
+      return [
+        { type: "text", text: part.text },
+        { type: "result", result: part.text },
+      ];
+    }
+
+    // tool_use event → tool call. Tool name is in part.tool, args in
+    // part.state.input. Only allowlisted tools are surfaced.
+    if (obj.type === "tool_use" && part?.type === "tool") {
+      const argField = OPENCODE_TOOL_ARG_FIELDS[part.tool];
+      if (argField === undefined) return []; // not allowlisted
+      const input = part.state?.input as Record<string, unknown> | undefined;
+      if (!input) return [];
+      const argValue = input[argField];
+      if (typeof argValue !== "string") return []; // missing/wrong arg field
+      return [{ type: "tool_call", name: part.tool, args: argValue }];
+    }
+
+    // step_finish, tool output, etc. → skip
+  } catch {
+    // Not valid JSON — skip
+  }
+  return [];
+};
+
 /** Options for the opencode agent provider. */
 export interface OpenCodeOptions {
+  /** Provider-specific reasoning effort variant (e.g. "high", "max", "low", "minimal"). */
+  readonly variant?: string;
   /** Environment variables injected by this agent provider. */
   readonly env?: Record<string, string>;
 }
@@ -445,8 +558,11 @@ export const opencode = (
   captureSessions: false,
 
   buildPrintCommand({ prompt }: AgentCommandOptions): PrintCommand {
+    const variantFlag = options?.variant
+      ? ` --variant ${shellEscape(options.variant)}`
+      : "";
     return {
-      command: `opencode run --model ${shellEscape(model)} ${shellEscape(prompt)}`,
+      command: `opencode run --model ${shellEscape(model)}${variantFlag} ${shellEscape(prompt)}`,
     };
   },
 
@@ -456,8 +572,8 @@ export const opencode = (
     return args;
   },
 
-  parseStreamLine(_line: string): ParsedStreamEvent[] {
-    return [];
+  parseStreamLine(line: string): ParsedStreamEvent[] {
+    return parseOpenCodeStreamLine(line);
   },
 });
 
@@ -471,15 +587,32 @@ export interface ClaudeCodeOptions {
   readonly env?: Record<string, string>;
   /** When false, session capture is disabled. Default: true. */
   readonly captureSessions?: boolean;
+  /** Override Claude session directories for tests or non-standard installs. */
+  readonly sessionStorage?: {
+    readonly hostProjectsDir?: string;
+    readonly sandboxProjectsDir?: string;
+  };
 }
 
 export const claudeCode = (
   model: string,
   options?: ClaudeCodeOptions,
-): AgentProvider => ({
+): AgentProvider & { readonly sessionStorage: AgentSessionStorage } => ({
   name: "claude-code",
   env: options?.env ?? {},
   captureSessions: options?.captureSessions ?? true,
+  sessionStorage: {
+    hostStore: (cwd) =>
+      hostSessionStore(cwd, options?.sessionStorage?.hostProjectsDir),
+    sandboxStore: (cwd, handle) =>
+      sandboxSessionStore(
+        cwd,
+        handle,
+        options?.sessionStorage?.sandboxProjectsDir ??
+          "/home/agent/.claude/projects",
+      ),
+    transfer: transferClaudeSession,
+  },
 
   buildPrintCommand({
     prompt,

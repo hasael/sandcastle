@@ -1,5 +1,4 @@
 import { NodeContext, NodeFileSystem } from "@effect/platform-node";
-import { existsSync } from "node:fs";
 import path, { join } from "node:path";
 import { styleText } from "node:util";
 import { Effect, Layer } from "effect";
@@ -33,8 +32,6 @@ import {
 } from "./AgentStreamEmitter.js";
 import type { SandboxHooks } from "./SandboxLifecycle.js";
 import { mergeProviderEnv } from "./mergeProviderEnv.js";
-import { hostSessionStore } from "./SessionStore.js";
-import { defaultSessionPathsLayer } from "./SessionPaths.js";
 import { generateTempBranchName, getCurrentBranch } from "./WorktreeManager.js";
 import {
   type PromptArgs,
@@ -204,9 +201,9 @@ export interface Timeouts {
   readonly copyToWorktreeMs?: number;
 }
 
-export interface RunOptions {
-  /** Agent provider to use (e.g. claudeCode("claude-opus-4-6")) */
-  readonly agent: AgentProvider;
+export interface RunOptions<A extends AgentProvider = AgentProvider> {
+  /** Agent provider to use (e.g. claudeCode("claude-opus-4-7")) */
+  readonly agent: A;
   /** Sandbox provider (e.g. docker({ imageName: "sandcastle:myrepo" })). */
   readonly sandbox: SandboxProvider;
   /**
@@ -283,6 +280,16 @@ export interface RunOptions {
 
 export type { IterationResult, IterationUsage } from "./Orchestrator.js";
 
+export type ResumeRunResultOptions = Omit<
+  RunOptions,
+  | "agent"
+  | "sandbox"
+  | "prompt"
+  | "promptFile"
+  | "resumeSession"
+  | "maxIterations"
+>;
+
 export interface RunResult {
   /** Per-iteration results (use `iterations.length` for the count). */
   readonly iterations: IterationResult[];
@@ -298,19 +305,29 @@ export interface RunResult {
   readonly logFilePath?: string;
   /** Host path to the preserved worktree, set when the run succeeded but the worktree had uncommitted changes. */
   readonly preservedWorktreePath?: string;
+  /** Continue the last captured agent session for exactly one iteration.
+   *  Present only when the provider supports resume (`sessionStorage` populated). */
+  readonly resume?: (
+    prompt: string,
+    options?: ResumeRunResultOptions,
+  ) => Promise<RunResult>;
 }
 
 /** Overload: with `Output.object`, returns `RunResult` with typed `output: T`. */
-export function run<T>(
-  options: RunOptions & { output: OutputObjectDefinition<T> },
+export function run<T, A extends AgentProvider>(
+  options: RunOptions<A> & { output: OutputObjectDefinition<T> },
 ): Promise<RunResult & { output: T }>;
 /** Overload: with `Output.string`, returns `RunResult` with `output: string`. */
-export function run(
-  options: RunOptions & { output: OutputStringDefinition },
+export function run<A extends AgentProvider>(
+  options: RunOptions<A> & { output: OutputStringDefinition },
 ): Promise<RunResult & { output: string }>;
 /** Overload: without `output`, returns the standard `RunResult`. */
-export function run(options: RunOptions): Promise<RunResult>;
-export async function run(options: RunOptions): Promise<RunResult & { output?: unknown }> {
+export function run<A extends AgentProvider>(
+  options: RunOptions<A>,
+): Promise<RunResult>;
+export async function run(
+  options: RunOptions,
+): Promise<RunResult & { output?: unknown }> {
   // If signal is already aborted, reject immediately without any setup
   options.signal?.throwIfAborted();
 
@@ -375,11 +392,17 @@ export async function run(options: RunOptions): Promise<RunResult & { output?: u
 
   // Validate: resumeSession file must exist on the host
   if (options.resumeSession) {
-    const hStore = hostSessionStore(hostRepoDir);
-    const sessionPath = hStore.sessionFilePath(options.resumeSession);
-    if (!existsSync(sessionPath)) {
+    if (!provider.sessionStorage) {
+      throw new Error(`${provider.name} does not support resumeSession`);
+    }
+    const hStore = provider.sessionStorage.hostStore(hostRepoDir);
+    const exists = await hStore.exists(options.resumeSession);
+    if (!exists) {
+      const sessionPath = hStore.sessionFilePath(options.resumeSession);
       throw new Error(
-        `resumeSession "${options.resumeSession}" not found: expected session file at ${sessionPath}`,
+        sessionPath
+          ? `resumeSession "${options.resumeSession}" not found: expected session file at ${sessionPath}`
+          : `resumeSession "${options.resumeSession}" not found`,
       );
     }
   }
@@ -487,7 +510,6 @@ export async function run(options: RunOptions): Promise<RunResult & { output?: u
   const runLayer = Layer.mergeAll(
     factoryLayer,
     displayLayer,
-    defaultSessionPathsLayer,
     agentStreamEmitterLayer,
   );
 
@@ -592,10 +614,31 @@ export async function run(options: RunOptions): Promise<RunResult & { output?: u
     ...result,
     logFilePath:
       resolvedLogging.type === "file" ? resolvedLogging.path : undefined,
+    resume: async (
+      prompt: string,
+      resumeOptions?: ResumeRunResultOptions,
+    ): Promise<RunResult> => {
+      const lastIteration = result.iterations.at(-1);
+      if (!lastIteration?.sessionId) {
+        throw new Error("Cannot resume: no sessionId was captured");
+      }
+      return run({
+        ...options,
+        ...resumeOptions,
+        prompt,
+        promptFile: undefined,
+        maxIterations: 1,
+        resumeSession: lastIteration.sessionId,
+      });
+    },
   };
 
   // Extract structured output after the iteration completes (separate pass from completion signal)
   if (options.output) {
+    // Structured output runs are single-iteration, so the last iteration is the
+    // one that produced this stdout. Carry its session id onto the error so a
+    // caller can resume the same session to re-emit corrected output.
+    const lastIteration = baseResult.iterations.at(-1);
     const output = await extractStructuredOutput(
       baseResult.stdout,
       options.output,
@@ -603,6 +646,8 @@ export async function run(options: RunOptions): Promise<RunResult & { output?: u
         commits: baseResult.commits,
         branch: baseResult.branch,
         preservedWorktreePath: baseResult.preservedWorktreePath,
+        sessionId: lastIteration?.sessionId,
+        sessionFilePath: lastIteration?.sessionFilePath,
       },
     );
     return { ...baseResult, output };

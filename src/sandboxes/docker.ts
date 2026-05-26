@@ -3,7 +3,7 @@
  *
  * Usage:
  *   import { docker } from "sandcastle/sandboxes/docker";
- *   await run({ agent: claudeCode("claude-opus-4-6"), sandbox: docker() });
+ *   await run({ agent: claudeCode("claude-opus-4-7"), sandbox: docker() });
  */
 
 import {
@@ -25,7 +25,12 @@ import {
   type InteractiveExecOptions,
 } from "../SandboxProvider.js";
 import type { MountConfig } from "../MountConfig.js";
-import { defaultImageName, resolveUserMounts } from "../mountUtils.js";
+import type { SelinuxLabel } from "../mountUtils.js";
+import {
+  defaultImageName,
+  resolveUserMounts,
+  processFileMountParents,
+} from "../mountUtils.js";
 
 export interface DockerOptions {
   /** Docker image name (default: derived from repo directory name). */
@@ -44,6 +49,14 @@ export interface DockerOptions {
    */
   readonly containerGid?: number;
   /**
+   * SELinux volume label suffix applied to bind mounts.
+   *
+   * - `"z"` — shared label (default). No-op on non-SELinux systems.
+   * - `"Z"` — private label; only this container can access the mount.
+   * - `false` — disable labeling entirely.
+   */
+  readonly selinuxLabel?: SelinuxLabel;
+  /**
    * Additional host directories to bind-mount into the sandbox.
    *
    * Each entry specifies a `hostPath` (tilde-expanded) and `sandboxPath`.
@@ -61,6 +74,30 @@ export interface DockerOptions {
    * When omitted, Docker's default bridge network is used.
    */
   readonly network?: string | readonly string[];
+  /**
+   * Supplementary groups to add the container user to, via `--group-add`.
+   *
+   * Accepts group names or numeric GIDs:
+   *
+   * - `["docker"]` → `--group-add docker`
+   * - `[999]` → `--group-add 999`
+   * - `["docker", 999]` → `--group-add docker --group-add 999`
+   *
+   * Useful for granting access to a bind-mounted Docker socket (Docker-outside-of-Docker).
+   * When omitted, no `--group-add` flags are added.
+   */
+  readonly groups?: readonly (string | number)[];
+  /**
+   * Limit the CPU resources available to the container, via `--cpus`.
+   *
+   * Maps directly to `docker run --cpus`. Accepts fractional values:
+   *
+   * - `2` → `--cpus 2` (at most 2 CPUs)
+   * - `1.5` → `--cpus 1.5` (at most 1.5 CPUs)
+   *
+   * When omitted, no `--cpus` flag is added and the container is unconstrained.
+   */
+  readonly cpus?: number;
 }
 
 /**
@@ -71,10 +108,17 @@ export interface DockerOptions {
  */
 export const docker = (options?: DockerOptions): SandboxProvider => {
   const configuredImageName = options?.imageName;
+  const selinuxLabel = options?.selinuxLabel ?? "z";
   const sandboxHomedir = "/home/agent";
   const userMounts = options?.mounts
     ? resolveUserMounts(options.mounts, sandboxHomedir)
     : [];
+  // Validate file mounts and collect parent dirs to create at container start.
+  // Throws at construction time if any file mount parent is outside sandboxHomedir.
+  const parentDirsToCreate = processFileMountParents(
+    userMounts,
+    sandboxHomedir,
+  );
 
   return createBindMountSandboxProvider({
     name: "docker",
@@ -102,10 +146,8 @@ export const docker = (options?: DockerOptions): SandboxProvider => {
       const imageName =
         configuredImageName ?? defaultImageName(createOptions.hostRepoPath);
 
-      const containerUid =
-        options?.containerUid ?? process.getuid?.() ?? 1000;
-      const containerGid =
-        options?.containerGid ?? process.getgid?.() ?? 1000;
+      const containerUid = options?.containerUid ?? process.getuid?.() ?? 1000;
+      const containerGid = options?.containerGid ?? process.getgid?.() ?? 1000;
 
       // Pre-flight: verify image exists and UID matches
       await checkImageUid(imageName, containerUid);
@@ -124,9 +166,44 @@ export const docker = (options?: DockerOptions): SandboxProvider => {
             workdir: worktreePath,
             user: `${containerUid}:${containerGid}`,
             network: options?.network,
+            groups: options?.groups,
+            cpus: options?.cpus,
+            selinuxLabel,
           },
         ),
       );
+
+      // Create parent directories for file mounts and chown to the container user
+      for (const dir of parentDirsToCreate) {
+        await new Promise<void>((resolve, reject) => {
+          execFile(
+            "docker",
+            [
+              "exec",
+              "--user",
+              "0:0",
+              containerName,
+              "sh",
+              "-c",
+              `mkdir -p "$1" && chown "$2" "$1"`,
+              "sh",
+              dir,
+              `${containerUid}:${containerGid}`,
+            ],
+            (error) => {
+              if (error) {
+                reject(
+                  new Error(
+                    `Failed to create parent directory '${dir}' in container: ${error.message}`,
+                  ),
+                );
+              } else {
+                resolve();
+              }
+            },
+          );
+        });
+      }
 
       // Set up signal handlers for cleanup
       const onExit = () => {
