@@ -37,19 +37,28 @@ const execGit = (
   cwd: string,
 ): Effect.Effect<string, WorktreeError> =>
   Effect.async((resume) => {
-    execFile("git", args, { cwd }, (error, stdout, stderr) => {
-      if (error) {
-        resume(
-          Effect.fail(
-            new WorktreeError({
-              message: stderr?.trim() || error.message,
-            }),
-          ),
-        );
-      } else {
-        resume(Effect.succeed(stdout));
-      }
-    });
+    // Force the C locale so git emits English, machine-stable messages. Several
+    // callers match git's stderr (e.g. "invalid reference") to decide control
+    // flow; under a localized locale gettext translates those strings and the
+    // matches silently fail, breaking worktree creation (issue #595).
+    execFile(
+      "git",
+      args,
+      { cwd, env: { ...process.env, LC_ALL: "C" } },
+      (error, stdout, stderr) => {
+        if (error) {
+          resume(
+            Effect.fail(
+              new WorktreeError({
+                message: stderr?.trim() || error.message,
+              }),
+            ),
+          );
+        } else {
+          resume(Effect.succeed(stdout));
+        }
+      },
+    );
   });
 
 /**
