@@ -50,6 +50,7 @@ import * as WorktreeManager from "./WorktreeManager.js";
 import { copyToWorktree } from "./CopyToWorktree.js";
 import { resolveCwd } from "./resolveCwd.js";
 import { patchGitMountsForWindows } from "./mountUtils.js";
+import { registerShutdown } from "./shutdownRegistry.js";
 
 export interface CreateSandboxOptions {
   /** Explicit branch for the worktree (required). */
@@ -859,7 +860,6 @@ export const createSandbox = async (
       ? () => syncOut(worktreePath, providerHandle as IsolatedSandboxHandle)
       : () => Effect.void;
 
-  // Set up signal handlers
   let closed = false;
 
   const forceCleanup = () => {
@@ -868,13 +868,9 @@ export const createSandbox = async (
     console.error(`  To clean up: git worktree remove --force ${worktreePath}`);
   };
 
-  const onSignal = () => {
-    forceCleanup();
-    process.exit(1);
-  };
-
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
+  // Route cleanup through the shared registry so concurrent sandboxes share one
+  // SIGINT/SIGTERM/exit listener instead of tripping MaxListenersExceededWarning.
+  const unregisterShutdown = registerShutdown(forceCleanup);
 
   // Build close function
   const doClose = async (): Promise<CloseResult> => {
@@ -916,8 +912,7 @@ export const createSandbox = async (
       timeouts: options.timeouts,
     },
     async () => {
-      process.removeListener("SIGINT", onSignal);
-      process.removeListener("SIGTERM", onSignal);
+      unregisterShutdown();
       return doClose();
     },
   );
