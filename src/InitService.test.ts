@@ -251,6 +251,23 @@ describe("InitService scaffold", () => {
     expect(dockerfile).toContain(SANDBOX_REPO_DIR);
   });
 
+  it.each([claudeCodeAgent, piAgent, codexAgent, opencodeAgent])(
+    "$name Dockerfile aligns UID/GID with -o so a host GID colliding with a reserved base-image GID (e.g. macOS staff=20) doesn't fail the build",
+    async (agent) => {
+      const dir = await makeDir();
+      await runScaffold(dir, { agent, model: agent.defaultModel });
+
+      const dockerfile = await readFile(
+        join(dir, ".sandcastle", "Dockerfile"),
+        "utf-8",
+      );
+      expect(dockerfile).toContain("groupmod -o -g $AGENT_GID node");
+      expect(dockerfile).toContain(
+        "usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node",
+      );
+    },
+  );
+
   it("claude-code Dockerfile template does not install pnpm or enable corepack", async () => {
     const dir = await makeDir();
     await runScaffold(dir);
