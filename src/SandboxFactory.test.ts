@@ -46,7 +46,7 @@ const mockHasUncommittedChanges = vi.mocked(
 /** Create a mock sandbox provider that records calls and delegates to a no-op handle. */
 const makeMockProvider = (): {
   provider: SandboxProvider;
-  createCalls: unknown[];
+  createCalls: any[];
   readonly closeCalls: number;
 } => {
   const stub = testStubProvider({
@@ -55,7 +55,7 @@ const makeMockProvider = (): {
   });
   return {
     provider: stub.provider,
-    createCalls: stub.createCalls as unknown[],
+    createCalls: stub.createCalls as any[],
     get closeCalls() {
       return stub.closeCalls.count;
     },

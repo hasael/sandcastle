@@ -286,18 +286,14 @@ export const orchestrate = (
                   provider.sessionStorage
                 ) {
                   yield* display.status(label("Resuming session"), "info");
-                  const sbStore = provider.sessionStorage.sandboxStore(
-                    ctx.sandboxRepoDir,
-                    bindMountHandle,
-                  );
-                  const hStore = provider.sessionStorage.hostStore(hostRepoDir);
                   yield* Effect.tryPromise({
                     try: () =>
-                      provider.sessionStorage!.transfer(
-                        hStore,
-                        sbStore,
-                        iterationResumeSession,
-                      ),
+                      provider.sessionStorage!.resumeIntoSandbox({
+                        hostCwd: hostRepoDir,
+                        sandboxCwd: ctx.sandboxRepoDir,
+                        sessionId: iterationResumeSession,
+                        handle: bindMountHandle,
+                      }),
                     catch: (e) =>
                       new SessionCaptureError({
                         message: `Session resume failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -389,31 +385,30 @@ export const orchestrate = (
                   bindMountHandle
                 ) {
                   yield* display.status(label("Capturing session"), "info");
-                  const sbStore = provider.sessionStorage.sandboxStore(
-                    ctx.sandboxRepoDir,
-                    bindMountHandle,
-                  );
-                  const hStore = provider.sessionStorage.hostStore(hostRepoDir);
                   yield* Effect.tryPromise({
                     try: () =>
-                      provider.sessionStorage!.transfer(
-                        sbStore,
-                        hStore,
+                      provider.sessionStorage!.captureToHost({
+                        hostCwd: hostRepoDir,
+                        sandboxCwd: ctx.sandboxRepoDir,
                         sessionId,
-                      ),
+                        handle: bindMountHandle,
+                      }),
                     catch: (e) =>
                       new SessionCaptureError({
                         message: `Session capture failed: ${e instanceof Error ? e.message : String(e)}`,
                         sessionId,
                       }),
                   });
-                  sessionFilePath = hStore.sessionFilePath(sessionId);
+                  sessionFilePath = provider.sessionStorage.hostSessionFilePath(
+                    hostRepoDir,
+                    sessionId,
+                  );
 
                   // Parse token usage from the captured session JSONL
                   if (provider.parseSessionUsage) {
                     const content = yield* Effect.promise(() =>
-                      hStore
-                        .readSession(sessionId)
+                      provider
+                        .sessionStorage!.readHostSession(hostRepoDir, sessionId)
                         .catch(() => undefined as string | undefined),
                     );
                     if (content) {

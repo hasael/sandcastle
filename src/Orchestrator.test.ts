@@ -3235,7 +3235,7 @@ describe("Session capture integration", () => {
   /**
    * Create a test factory that provides a bindMountHandle with copyFileIn/copyFileOut
    * backed by the filesystem. This allows session capture to work through the
-   * sandboxSessionStore → transferClaudeSession → hostSessionStore path.
+   * sessionStorage.captureToHost / resumeIntoSandbox path.
    */
   const makeSessionCaptureFactory = (
     hostRepoDir: string,
