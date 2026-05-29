@@ -1,4 +1,4 @@
-import { Deferred, Effect } from "effect";
+import { Deferred, Duration, Effect, Fiber } from "effect";
 import { AgentStreamEmitter } from "./AgentStreamEmitter.js";
 import { Display } from "./Display.js";
 import { preprocessPrompt } from "./PromptPreprocessor.js";
@@ -58,49 +58,62 @@ const invokeAgent = (
       { result: string; sessionId?: string; usage?: IterationUsage },
       never
     >();
-    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    let timeoutFiber: Fiber.RuntimeFiber<unknown, unknown> | null = null;
     let completionDetected = false;
 
     // Periodic idle warning state
-    let warningHandle: ReturnType<typeof setInterval> | null = null;
+    let warningFiber: Fiber.RuntimeFiber<unknown, unknown> | null = null;
     let idleMinuteCounter = 0;
 
+    const interruptFiber = (
+      fiber: Fiber.RuntimeFiber<unknown, unknown> | null,
+    ) => {
+      if (fiber !== null) Effect.runFork(Fiber.interrupt(fiber));
+    };
+
     const startWarningInterval = () => {
-      if (warningHandle !== null) clearInterval(warningHandle);
+      interruptFiber(warningFiber);
       idleMinuteCounter = 0;
-      warningHandle = setInterval(() => {
-        idleMinuteCounter++;
-        onIdleWarning(idleMinuteCounter);
-      }, idleWarningIntervalMs);
+      warningFiber = Effect.runFork(
+        Effect.gen(function* () {
+          while (true) {
+            yield* Effect.sleep(Duration.millis(idleWarningIntervalMs));
+            idleMinuteCounter++;
+            onIdleWarning(idleMinuteCounter);
+          }
+        }),
+      );
     };
 
     const resetTimer = () => {
-      if (timeoutHandle !== null) clearTimeout(timeoutHandle);
+      interruptFiber(timeoutFiber);
       if (completionDetected) {
         // Post-signal grace window — successful resolution on expiry.
-        timeoutHandle = setTimeout(() => {
-          onCompletionTimeout(completionTimeoutMs);
-          Effect.runPromise(
-            Deferred.succeed(completionTimeoutDeferred, {
+        timeoutFiber = Effect.runFork(
+          Effect.gen(function* () {
+            yield* Effect.sleep(Duration.millis(completionTimeoutMs));
+            onCompletionTimeout(completionTimeoutMs);
+            yield* Deferred.succeed(completionTimeoutDeferred, {
               result: resultText || accumulatedOutput,
               sessionId,
               usage,
-            }),
-          ).catch(() => {});
-        }, completionTimeoutMs);
+            });
+          }),
+        );
       } else {
         // Pre-signal idle window — failure on expiry.
-        timeoutHandle = setTimeout(() => {
-          Effect.runPromise(
-            Deferred.fail(
+        timeoutFiber = Effect.runFork(
+          Effect.gen(function* () {
+            yield* Effect.sleep(Duration.millis(idleTimeoutMs));
+            yield* Deferred.fail(
               timeoutSignal,
               new AgentIdleTimeoutError({
                 message: `Agent idle for ${idleTimeoutMs / 1000} seconds — no output received. Consider increasing the idle timeout with --idle-timeout.`,
                 timeoutMs: idleTimeoutMs,
               }),
-            ),
-          ).catch(() => {});
-        }, idleTimeoutMs);
+            );
+          }),
+        );
         // Reset warning interval on activity, idle-phase only.
         startWarningInterval();
       }
@@ -115,9 +128,7 @@ const invokeAgent = (
         return yield* Effect.die(signal.reason);
       }
       const onAbort = () => {
-        Effect.runPromise(Deferred.die(abortDeferred, signal.reason)).catch(
-          () => {},
-        );
+        Effect.runFork(Deferred.die(abortDeferred, signal.reason));
       };
       signal.addEventListener("abort", onAbort, { once: true });
       abortCleanup = () => signal.removeEventListener("abort", onAbort);
@@ -157,10 +168,8 @@ const invokeAgent = (
             completionSignals.some((sig) => accumulatedOutput.includes(sig))
           ) {
             completionDetected = true;
-            if (warningHandle !== null) {
-              clearInterval(warningHandle);
-              warningHandle = null;
-            }
+            interruptFiber(warningFiber);
+            warningFiber = null;
           }
           resetTimer();
         },
@@ -190,14 +199,10 @@ const invokeAgent = (
     }).pipe(
       Effect.ensuring(
         Effect.sync(() => {
-          if (timeoutHandle !== null) {
-            clearTimeout(timeoutHandle);
-            timeoutHandle = null;
-          }
-          if (warningHandle !== null) {
-            clearInterval(warningHandle);
-            warningHandle = null;
-          }
+          interruptFiber(timeoutFiber);
+          timeoutFiber = null;
+          interruptFiber(warningFiber);
+          warningFiber = null;
         }),
       ),
     );
@@ -218,14 +223,10 @@ const invokeAgent = (
       Effect.ensuring(
         Effect.sync(() => {
           abortCleanup?.();
-          if (timeoutHandle !== null) {
-            clearTimeout(timeoutHandle);
-            timeoutHandle = null;
-          }
-          if (warningHandle !== null) {
-            clearInterval(warningHandle);
-            warningHandle = null;
-          }
+          interruptFiber(timeoutFiber);
+          timeoutFiber = null;
+          interruptFiber(warningFiber);
+          warningFiber = null;
         }),
       ),
     );
