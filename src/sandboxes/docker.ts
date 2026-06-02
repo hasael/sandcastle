@@ -121,6 +121,18 @@ export interface DockerOptions {
    * When omitted, no `--cpus` flag is added and the container is unconstrained.
    */
   readonly cpus?: number;
+  /**
+   * Enable rootless Docker compatibility mode.
+   *
+   * When `true`, the container is started as UID 0 (which maps to the host
+   * user under rootless Docker's user namespace). The pre-flight UID check
+   * is skipped since the image UID (e.g. 1000) intentionally does not match
+   * the runtime UID (0).
+   *
+   * On non-rootless Docker, this flag should be `false` (default) — running
+   * as UID 0 would give the container real root access to bind-mounted files.
+   */
+  readonly rootless?: boolean;
 }
 
 /**
@@ -173,8 +185,13 @@ export const docker = (options?: DockerOptions): SandboxProvider => {
       const containerUid = options?.containerUid ?? process.getuid?.() ?? 1000;
       const containerGid = options?.containerGid ?? process.getgid?.() ?? 1000;
 
-      // Pre-flight: verify image exists and UID matches
-      await checkImageUid(imageName, containerUid);
+      const isRootless = options?.rootless ?? false;
+
+      // Pre-flight: verify image exists and UID matches (skip in rootless mode
+      // since we intentionally run as UID 0 which won't match the image UID)
+      if (!isRootless) {
+        await checkImageUid(imageName, containerUid);
+      }
 
       // Start container
       await Effect.runPromise(
@@ -188,7 +205,7 @@ export const docker = (options?: DockerOptions): SandboxProvider => {
           {
             volumeMounts,
             workdir: worktreePath,
-            user: `${containerUid}:${containerGid}`,
+            user: isRootless ? "0:0" : `${containerUid}:${containerGid}`,
             network: options?.network,
             groups: options?.groups,
             devices: options?.devices,

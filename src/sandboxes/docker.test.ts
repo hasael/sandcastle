@@ -757,6 +757,138 @@ describe("docker()", () => {
     await handle.close();
   });
 
+  it("rootless: true skips checkImageUid pre-flight", async () => {
+    mockExecFile.mockImplementation((_command, _args, ...rest: any[]) => {
+      const callback = rest[rest.length - 1];
+      callback(null, "", "");
+      return undefined as any;
+    });
+
+    const provider = docker({ rootless: true });
+    const handle = await provider.create({
+      worktreePath: "/tmp/worktree",
+      hostRepoPath: "/tmp/repo",
+      mounts: [
+        { hostPath: "/tmp/worktree", sandboxPath: "/home/agent/workspace" },
+      ],
+      env: {},
+    });
+
+    // Should NOT have any docker image inspect call
+    const inspectCall = mockExecFile.mock.calls.find(
+      ([, args]) =>
+        Array.isArray(args) && args[0] === "image" && args[1] === "inspect",
+    );
+    expect(inspectCall).toBeUndefined();
+
+    // Should still have a docker run call
+    const runCall = mockExecFile.mock.calls.find(
+      ([, args]) => Array.isArray(args) && args[0] === "run",
+    );
+    expect(runCall).toBeDefined();
+
+    await handle.close();
+  });
+
+  it("rootless: true passes --user 0:0 to docker run", async () => {
+    mockExecFile.mockImplementation((_command, _args, ...rest: any[]) => {
+      const callback = rest[rest.length - 1];
+      callback(null, "", "");
+      return undefined as any;
+    });
+
+    const provider = docker({ rootless: true });
+    const handle = await provider.create({
+      worktreePath: "/tmp/worktree",
+      hostRepoPath: "/tmp/repo",
+      mounts: [
+        { hostPath: "/tmp/worktree", sandboxPath: "/home/agent/workspace" },
+      ],
+      env: {},
+    });
+
+    const runCall = mockExecFile.mock.calls.find(
+      ([, args]) => Array.isArray(args) && args[0] === "run",
+    );
+    const runArgs = runCall![1] as string[];
+    const userIdx = runArgs.indexOf("--user");
+    expect(userIdx).toBeGreaterThan(-1);
+    expect(runArgs[userIdx + 1]).toBe("0:0");
+
+    await handle.close();
+  });
+
+  it("rootless: false (default) passes host UID/GID to docker run", async () => {
+    mockExecFile.mockImplementation((_command, args, ...rest: any[]) => {
+      const callback = rest[rest.length - 1];
+      if (Array.isArray(args) && args[0] === "image" && args[1] === "inspect") {
+        const hostUid = process.getuid?.() ?? 1000;
+        const hostGid = process.getgid?.() ?? 1000;
+        callback(null, `${hostUid}:${hostGid}\n`, "");
+      } else {
+        callback(null, "", "");
+      }
+      return undefined as any;
+    });
+
+    const provider = docker();
+    const handle = await provider.create({
+      worktreePath: "/tmp/worktree",
+      hostRepoPath: "/tmp/repo",
+      mounts: [
+        { hostPath: "/tmp/worktree", sandboxPath: "/home/agent/workspace" },
+      ],
+      env: {},
+    });
+
+    const runCall = mockExecFile.mock.calls.find(
+      ([, args]) => Array.isArray(args) && args[0] === "run",
+    );
+    const runArgs = runCall![1] as string[];
+    const userIdx = runArgs.indexOf("--user");
+    expect(userIdx).toBeGreaterThan(-1);
+    const hostUid = process.getuid?.() ?? 1000;
+    const hostGid = process.getgid?.() ?? 1000;
+    expect(runArgs[userIdx + 1]).toBe(`${hostUid}:${hostGid}`);
+
+    await handle.close();
+  });
+
+  it("rootless: true does not check image UID even with mismatched containerUid", async () => {
+    mockExecFile.mockImplementation((_command, _args, ...rest: any[]) => {
+      const callback = rest[rest.length - 1];
+      callback(null, "", "");
+      return undefined as any;
+    });
+
+    // rootless + containerUid should not trigger checkImageUid at all
+    const provider = docker({ rootless: true, containerUid: 500 });
+    const handle = await provider.create({
+      worktreePath: "/tmp/worktree",
+      hostRepoPath: "/tmp/repo",
+      mounts: [
+        { hostPath: "/tmp/worktree", sandboxPath: "/home/agent/workspace" },
+      ],
+      env: {},
+    });
+
+    const inspectCall = mockExecFile.mock.calls.find(
+      ([, args]) =>
+        Array.isArray(args) && args[0] === "image" && args[1] === "inspect",
+    );
+    expect(inspectCall).toBeUndefined();
+
+    // Still passes --user 0:0, not the containerUid
+    const runCall = mockExecFile.mock.calls.find(
+      ([, args]) => Array.isArray(args) && args[0] === "run",
+    );
+    const runArgs = runCall![1] as string[];
+    const userIdx = runArgs.indexOf("--user");
+    expect(runArgs[userIdx + 1]).toBe("0:0");
+
+    await handle.close();
+  });
+
   it("shares a single SIGINT listener across many concurrent sandboxes", async () => {
     mockExecFile.mockImplementation((_command, _args, ...rest: any[]) => {
       const callback = rest[rest.length - 1];
