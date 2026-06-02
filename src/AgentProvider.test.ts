@@ -914,8 +914,8 @@ describe("codex factory", () => {
   });
 
   it("accepts an env option and exposes it on the provider", () => {
-    const provider = codex("gpt-5.4-mini", { env: { OPENAI_KEY: "xyz" } });
-    expect(provider.env).toEqual({ OPENAI_KEY: "xyz" });
+    const provider = codex("gpt-5.4-mini", { env: { OPENAI_API_KEY: "xyz" } });
+    expect(provider.env).toEqual({ OPENAI_API_KEY: "xyz" });
   });
 
   it("defaults env to empty object when not provided", () => {

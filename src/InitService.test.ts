@@ -12,11 +12,15 @@ import {
   listIssueTrackers,
   getIssueTracker,
   getSandboxProvider,
+  listApiProviders,
+  getApiProvider,
+  getSupportedAgents,
 } from "./InitService.js";
 import type {
   AgentEntry,
   PackageManager,
   ScaffoldOptions,
+  ApiProviderEntry,
 } from "./InitService.js";
 import { SANDBOX_REPO_DIR } from "./SandboxFactory.js";
 import { SKELETON_PROMPT } from "./templates.js";
@@ -66,18 +70,18 @@ describe("InitService scaffold", () => {
     {
       agent: claudeCodeAgent,
       expectedKey: "ANTHROPIC_API_KEY=",
-      unexpectedKey: "OPENAI_KEY=",
+      unexpectedKey: "OPENAI_API_KEY=",
       expectIssue191Link: true,
     },
     {
       agent: piAgent,
       expectedKey: "ANTHROPIC_API_KEY=",
-      unexpectedKey: "OPENAI_KEY=",
+      unexpectedKey: "OPENAI_API_KEY=",
       expectIssue191Link: false,
     },
     {
       agent: codexAgent,
-      expectedKey: "OPENAI_KEY=",
+      expectedKey: "OPENAI_API_KEY=",
       unexpectedKey: "ANTHROPIC_API_KEY=",
       expectIssue191Link: false,
     },
@@ -2119,7 +2123,338 @@ describe("InitService scaffold", () => {
     });
   });
 
-  // --- ESM extension detection ---
+  // --- Gitea issue tracker ---
+
+  describe("Gitea issue tracker", () => {
+    it("getIssueTracker returns gitea-issues entry with expected templateArgs", () => {
+      const manager = getIssueTracker("gitea-issues");
+      expect(manager).toBeDefined();
+      expect(manager!.label).toBe("Gitea Issues");
+      expect(manager!.templateArgs.LIST_TASKS_COMMAND).toContain(
+        "tea issues list",
+      );
+      expect(manager!.templateArgs.LIST_TASKS_COMMAND).toContain(
+        "--output json",
+      );
+      expect(manager!.templateArgs.LIST_TASKS_COMMAND).toContain(
+        "--labels Sandcastle",
+      );
+      expect(manager!.templateArgs.VIEW_TASK_COMMAND).toContain(
+        "tea issues <ID>",
+      );
+      expect(manager!.templateArgs.CLOSE_TASK_COMMAND).toContain(
+        "tea issues close",
+      );
+      expect(manager!.templateArgs.ISSUE_TRACKER_TOOLS).toContain("tea");
+      expect(manager!.templateArgs.ISSUE_TRACKER_TOOLS).toContain(
+        "gitea.com/gitea/tea",
+      );
+    });
+
+    it("listIssueTrackers includes gitea-issues", () => {
+      const managers = listIssueTrackers();
+      expect(managers.some((m) => m.name === "gitea-issues")).toBe(true);
+    });
+
+    it("gitea-issues envExample contains GITEA_TOKEN and GITEA_SERVER_URL", () => {
+      const manager = getIssueTracker("gitea-issues");
+      expect(manager!.envExample).toContain("GITEA_TOKEN=");
+      expect(manager!.envExample).toContain("GITEA_SERVER_URL=");
+      expect(manager!.envExample).not.toContain("GH_TOKEN=");
+    });
+
+    it("simple-loop with gitea-issues produces prompt with tea issues commands", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        templateName: "simple-loop",
+        issueTracker: getIssueTracker("gitea-issues"),
+      });
+
+      const prompt = await readFile(
+        join(dir, ".sandcastle", "prompt.md"),
+        "utf-8",
+      );
+      expect(prompt).toContain("tea issues list");
+      expect(prompt).toContain("tea issues close");
+      expect(prompt).not.toContain("gh issue list");
+      expect(prompt).not.toContain("{{LIST_TASKS_COMMAND}}");
+      expect(prompt).not.toContain("{{CLOSE_TASK_COMMAND}}");
+    });
+
+    it("scaffold with gitea-issues produces Dockerfile with tea CLI install", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        issueTracker: getIssueTracker("gitea-issues"),
+      });
+
+      const dockerfile = await readFile(
+        join(dir, ".sandcastle", "Dockerfile"),
+        "utf-8",
+      );
+      expect(dockerfile).toContain("tea");
+      expect(dockerfile).toContain("gitea.com/gitea/tea");
+      expect(dockerfile).not.toContain("GitHub CLI");
+      expect(dockerfile).not.toContain("{{ISSUE_TRACKER_TOOLS}}");
+    });
+
+    it("generates .env.example with GITEA_TOKEN when issue tracker is gitea-issues", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        issueTracker: getIssueTracker("gitea-issues"),
+      });
+
+      const envExample = await readFile(
+        join(dir, ".sandcastle", ".env.example"),
+        "utf-8",
+      );
+      expect(envExample).toContain("GITEA_TOKEN=");
+      expect(envExample).toContain("GITEA_SERVER_URL=");
+      expect(envExample).not.toContain("GH_TOKEN=");
+    });
+
+    it("gitea-issues injects tea login hook in scaffolded main file", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        templateName: "simple-loop",
+        issueTracker: getIssueTracker("gitea-issues"),
+      });
+
+      const mainTs = await readFile(
+        join(dir, ".sandcastle", "main.mts"),
+        "utf-8",
+      );
+      expect(mainTs).toContain("tea login add");
+      expect(mainTs).toContain("GITEA_SERVER_URL");
+      expect(mainTs).toContain("GITEA_TOKEN");
+    });
+
+    it("gitea-issues skips --label Sandcastle (no label to strip)", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        templateName: "simple-loop",
+        issueTracker: getIssueTracker("gitea-issues"),
+      });
+
+      const prompt = await readFile(
+        join(dir, ".sandcastle", "prompt.md"),
+        "utf-8",
+      );
+      // gitea-issues supports labels, so --labels Sandcastle is retained
+      expect(prompt).toContain("--labels Sandcastle");
+    });
+
+    it("gitea-issues with pi agent produces correct env and tea login hook", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: piAgent,
+        model: "claude-sonnet-4-6",
+        templateName: "simple-loop",
+        issueTracker: getIssueTracker("gitea-issues"),
+      });
+
+      const envExample = await readFile(
+        join(dir, ".sandcastle", ".env.example"),
+        "utf-8",
+      );
+      expect(envExample).toContain("ANTHROPIC_API_KEY=");
+      expect(envExample).toContain("GITEA_TOKEN=");
+
+      const mainTs = await readFile(
+        join(dir, ".sandcastle", "main.mts"),
+        "utf-8",
+      );
+      expect(mainTs).toContain("tea login add");
+    });
+  });
+
+  // --- API provider (Z AI) ---
+
+  describe("API provider registry", () => {
+    it("listApiProviders returns anthropic-direct and zai", () => {
+      const providers = listApiProviders();
+      expect(providers.some((p) => p.name === "anthropic-direct")).toBe(true);
+      expect(providers.some((p) => p.name === "zai")).toBe(true);
+    });
+
+    it("getApiProvider returns zai entry with agent defaults", () => {
+      const provider = getApiProvider("zai");
+      expect(provider).toBeDefined();
+      expect(provider!.label).toBe("Z AI");
+      expect(provider!.agentDefaults["claude-code"]).toBeDefined();
+      expect(provider!.agentDefaults["pi"]).toBeDefined();
+      expect(provider!.agentDefaults["codex"]).toBeDefined();
+    });
+
+    it("anthropic-direct has no agent defaults (passthrough)", () => {
+      const provider = getApiProvider("anthropic-direct");
+      expect(provider).toBeDefined();
+      expect(Object.keys(provider!.agentDefaults)).toHaveLength(0);
+    });
+
+    it("getApiProvider returns undefined for unknown provider", () => {
+      expect(getApiProvider("nonexistent")).toBeUndefined();
+    });
+
+    it("getSupportedAgents returns null for anthropic-direct (all supported)", () => {
+      const provider = getApiProvider("anthropic-direct")!;
+      expect(getSupportedAgents(provider)).toBeNull();
+    });
+
+    it("getSupportedAgents returns agent list for zai", () => {
+      const provider = getApiProvider("zai")!;
+      const supported = getSupportedAgents(provider);
+      expect(supported).toContain("claude-code");
+      expect(supported).toContain("pi");
+      expect(supported).toContain("codex");
+      expect(supported).not.toContain("cursor");
+    });
+
+    it("zai + claude-code env has ANTHROPIC_AUTH_TOKEN and ANTHROPIC_BASE_URL", () => {
+      const provider = getApiProvider("zai")!;
+      const defaults = provider.agentDefaults["claude-code"]!;
+      expect(defaults.envExample).toContain("ANTHROPIC_AUTH_TOKEN=");
+      expect(defaults.envExample).toContain(
+        "ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic",
+      );
+      expect(defaults.defaultModel).toBe("GLM-5.1");
+    });
+
+    it("zai + pi env has ZAI_API_KEY", () => {
+      const provider = getApiProvider("zai")!;
+      const defaults = provider.agentDefaults["pi"]!;
+      expect(defaults.envExample).toContain("ZAI_API_KEY=");
+      expect(defaults.defaultModel).toBe("zai/GLM-5.1");
+    });
+
+    it("zai + codex env has OPENAI_API_KEY and OPENAI_BASE_URL", () => {
+      const provider = getApiProvider("zai")!;
+      const defaults = provider.agentDefaults["codex"]!;
+      expect(defaults.envExample).toContain("OPENAI_API_KEY=");
+      expect(defaults.envExample).toContain(
+        "OPENAI_BASE_URL=https://api.z.ai/api/coding/paas/v4",
+      );
+      expect(defaults.defaultModel).toBe("GLM-5.1");
+    });
+  });
+
+  describe("API provider scaffold", () => {
+    it("scaffolds with Z AI provider produces zai env vars for claude-code", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: claudeCodeAgent,
+        model: "GLM-5.1",
+        apiProvider: getApiProvider("zai"),
+      });
+
+      const envExample = await readFile(
+        join(dir, ".sandcastle", ".env.example"),
+        "utf-8",
+      );
+      expect(envExample).toContain("ANTHROPIC_AUTH_TOKEN=");
+      expect(envExample).toContain(
+        "ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic",
+      );
+      expect(envExample).not.toContain("ANTHROPIC_API_KEY=");
+    });
+
+    it("scaffolds with Z AI provider produces zai env vars for pi", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: piAgent,
+        model: "zai/GLM-5.1",
+        apiProvider: getApiProvider("zai"),
+      });
+
+      const envExample = await readFile(
+        join(dir, ".sandcastle", ".env.example"),
+        "utf-8",
+      );
+      expect(envExample).toContain("ZAI_API_KEY=");
+      expect(envExample).not.toContain("ANTHROPIC_API_KEY=");
+    });
+
+    it("scaffolds with Z AI provider produces zai env vars for codex", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: codexAgent,
+        model: "GLM-5.1",
+        apiProvider: getApiProvider("zai"),
+      });
+
+      const envExample = await readFile(
+        join(dir, ".sandcastle", ".env.example"),
+        "utf-8",
+      );
+      expect(envExample).toContain("OPENAI_API_KEY=");
+      expect(envExample).toContain(
+        "OPENAI_BASE_URL=https://api.z.ai/api/coding/paas/v4",
+      );
+    });
+
+    it("scaffolds with anthropic-direct uses agent default env vars", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: claudeCodeAgent,
+        model: "claude-opus-4-7",
+        apiProvider: getApiProvider("anthropic-direct"),
+      });
+
+      const envExample = await readFile(
+        join(dir, ".sandcastle", ".env.example"),
+        "utf-8",
+      );
+      expect(envExample).toContain("ANTHROPIC_API_KEY=");
+      expect(envExample).not.toContain("ANTHROPIC_AUTH_TOKEN=");
+      expect(envExample).not.toContain("ZAI_API_KEY=");
+    });
+
+    it("scaffolds without apiProvider uses agent default env vars", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: claudeCodeAgent,
+        model: "claude-opus-4-7",
+      });
+
+      const envExample = await readFile(
+        join(dir, ".sandcastle", ".env.example"),
+        "utf-8",
+      );
+      expect(envExample).toContain("ANTHROPIC_API_KEY=");
+      expect(envExample).not.toContain("ANTHROPIC_AUTH_TOKEN=");
+    });
+
+    it("Z AI with unsupported agent falls back to agent default env", async () => {
+      // Z AI doesn't have a cursor entry, so the agent's default envExample is used
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: cursorAgent,
+        model: "composer-2",
+        apiProvider: getApiProvider("zai"),
+      });
+
+      const envExample = await readFile(
+        join(dir, ".sandcastle", ".env.example"),
+        "utf-8",
+      );
+      // Falls back to cursor's default env since zai has no cursor override
+      expect(envExample).toContain("CURSOR_API_KEY=");
+    });
+
+    it("Z AI model is reflected in scaffolded main file", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: claudeCodeAgent,
+        model: "GLM-5.1",
+        apiProvider: getApiProvider("zai"),
+      });
+
+      const mainTs = await readFile(
+        join(dir, ".sandcastle", "main.mts"),
+        "utf-8",
+      );
+      expect(mainTs).toContain('claudeCode("GLM-5.1")');
+    });
+  });
 
   describe("main file extension detection", () => {
     it("scaffolds main.mts when no package.json exists", async () => {

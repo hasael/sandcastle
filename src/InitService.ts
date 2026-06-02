@@ -435,7 +435,7 @@ ANTHROPIC_API_KEY=`,
     factoryImport: "codex",
     dockerfileTemplate: CODEX_DOCKERFILE,
     envExample: `# OpenAI API key
-OPENAI_KEY=`,
+OPENAI_API_KEY=`,
     setupCommand: `codex "$(cat ${SETUP_ISSUE_TRACKER_PATH})"`,
   },
   {
@@ -476,6 +476,77 @@ GITHUB_TOKEN=`,
 export const listAgents = (): AgentEntry[] => AGENT_REGISTRY;
 
 // ---------------------------------------------------------------------------
+// API provider registry (internal — not part of public API)
+// ---------------------------------------------------------------------------
+
+export interface ApiProviderEntry {
+  readonly name: string;
+  readonly label: string;
+  /**
+   * Per-agent overrides when this API provider is selected. Keyed by agent name.
+   * Each entry provides env example lines and a default model override.
+   */
+  readonly agentDefaults: Readonly<
+    Record<
+      string,
+      {
+        readonly envExample: string;
+        readonly defaultModel: string;
+      }
+    >
+  >;
+}
+
+const API_PROVIDER_REGISTRY: ApiProviderEntry[] = [
+  {
+    name: "anthropic-direct",
+    label: "Anthropic (direct)",
+    agentDefaults: {},
+  },
+  {
+    name: "zai",
+    label: "Z AI",
+    agentDefaults: {
+      "claude-code": {
+        envExample: `# Z AI API key (Anthropic-compatible endpoint)
+ANTHROPIC_AUTH_TOKEN=
+# Z AI base URL
+ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic`,
+        defaultModel: "GLM-5.1",
+      },
+      pi: {
+        envExample: `# Z AI API key
+ZAI_API_KEY=`,
+        defaultModel: "zai/GLM-5.1",
+      },
+      codex: {
+        envExample: `# Z AI API key (OpenAI-compatible endpoint)
+OPENAI_API_KEY=
+# Z AI base URL
+OPENAI_BASE_URL=https://api.z.ai/api/coding/paas/v4`,
+        defaultModel: "GLM-5.1",
+      },
+    },
+  },
+];
+
+export const listApiProviders = (): ApiProviderEntry[] => API_PROVIDER_REGISTRY;
+
+export const getApiProvider = (name: string): ApiProviderEntry | undefined =>
+  API_PROVIDER_REGISTRY.find((p) => p.name === name);
+
+/**
+ * Return the set of agent names supported by the given API provider.
+ * An empty agentDefaults means all agents are supported (anthropic-direct).
+ */
+export const getSupportedAgents = (
+  provider: ApiProviderEntry,
+): string[] | null => {
+  const keys = Object.keys(provider.agentDefaults);
+  return keys.length === 0 ? null : keys;
+};
+
+// ---------------------------------------------------------------------------
 // Issue tracker registry (internal — not part of public API)
 // ---------------------------------------------------------------------------
 
@@ -514,6 +585,11 @@ RUN curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/i
 
 RUN corepack enable`;
 
+const GITEA_CLI_TOOLS = `# Install Gitea CLI (tea)
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -fsSL "https://gitea.com/gitea/tea/releases/download/v0.14.1/tea-0.14.1-linux-\${ARCH}" \
+    -o /usr/local/bin/tea && chmod +x /usr/local/bin/tea`;
+
 // Sentinels baked into the scaffold for the `custom` issue tracker. The
 // project ships deliberately broken-until-configured; the setup agent finds
 // and replaces these markers in place (see SETUP_ISSUE_TRACKER.md). Defined as
@@ -539,6 +615,20 @@ const ISSUE_TRACKER_REGISTRY: IssueTrackerEntry[] = [
 # Create a fine-grained token: https://github.com/settings/personal-access-tokens/new
 # Required repository permissions: Issues (Read and write) and Metadata (Read)
 GH_TOKEN=`,
+  },
+  {
+    name: "gitea-issues",
+    label: "Gitea Issues",
+    templateArgs: {
+      LIST_TASKS_COMMAND: `tea issues list --state open --limit 100 --output json --labels Sandcastle`,
+      VIEW_TASK_COMMAND: "tea issues <ID>",
+      CLOSE_TASK_COMMAND: "tea issues close <ID>",
+      ISSUE_TRACKER_TOOLS: GITEA_CLI_TOOLS,
+    },
+    envExample: `# Gitea personal access token
+GITEA_TOKEN=
+# Gitea server URL (e.g. https://gitea.mycompany.com)
+GITEA_SERVER_URL=`,
   },
   {
     name: "beads",
@@ -752,6 +842,7 @@ const rewriteMainTs = (
   model: string,
   sandboxProvider: SandboxProviderEntry,
   mainFilename: string,
+  issueTracker?: IssueTrackerEntry,
 ): Effect.Effect<void, Error, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -794,15 +885,25 @@ const rewriteMainTs = (
     // docker is selected.
     content = content.replace(/\bdocker\b/g, sandboxProvider.name);
 
+    // When gitea-issues is the selected tracker, inject a `tea login add`
+    // hook into the scaffolded main.ts's onSandboxReady hooks so the tea
+    // CLI is authenticated before any issue commands run.
+    if (issueTracker?.name === "gitea-issues") {
+      content = content.replace(
+        /(onSandboxReady:\s*\[)/g,
+        `$1\n      { command: 'tea login add --name sandcastle --url "$GITEA_SERVER_URL" --token "$GITEA_TOKEN" || true' },`,
+      );
+    }
+
     yield* fs
       .writeFileString(mainTsPath, content)
       .pipe(Effect.mapError((e) => new Error(e.message)));
   });
 
 /**
- * When the user opted out of the Sandcastle label, strip ` --label Sandcastle`
+ * When the user opted out of the Sandcastle label, strip ` --label(s) Sandcastle`
  * from all `.md` files in the scaffolded config directory so that `gh issue list`
- * commands work without a label filter.
+ * or `tea issues list` commands work without a label filter.
  */
 const rewritePromptFiles = (
   configDir: string,
@@ -820,7 +921,7 @@ const rewritePromptFiles = (
           const content = yield* fs
             .readFileString(filePath)
             .pipe(Effect.mapError((e) => new Error(e.message)));
-          const updated = content.replace(/ --label Sandcastle/g, "");
+          const updated = content.replace(/ --labels? Sandcastle/g, "");
           if (updated !== content) {
             yield* fs
               .writeFileString(filePath, updated)
@@ -968,6 +1069,7 @@ export interface ScaffoldOptions {
   createLabel?: boolean;
   issueTracker?: IssueTrackerEntry;
   sandboxProvider?: SandboxProviderEntry;
+  apiProvider?: ApiProviderEntry;
 }
 
 export interface ScaffoldResult {
@@ -1011,6 +1113,7 @@ export const scaffold = (
       createLabel = true,
       issueTracker = ISSUE_TRACKER_REGISTRY[0]!, // default: github-issues
       sandboxProvider = SANDBOX_PROVIDER_REGISTRY[0]!, // default: docker
+      apiProvider,
     } = options;
     const fs = yield* FileSystem.FileSystem;
     const configDir = join(repoDir, ".sandcastle");
@@ -1034,8 +1137,12 @@ export const scaffold = (
 
     const templateDir = yield* getTemplateDir(templateName);
 
-    // Build .env.example from agent + issue tracker env blocks
-    const envExampleParts = [agent.envExample];
+    // Build .env.example from API provider (if Z AI) or agent + issue tracker env blocks
+    const agentEnvExample =
+      apiProvider && apiProvider.agentDefaults[agent.name]
+        ? apiProvider.agentDefaults[agent.name]!.envExample
+        : agent.envExample;
+    const envExampleParts = [agentEnvExample];
     if (issueTracker.envExample) {
       envExampleParts.push(issueTracker.envExample);
     }
@@ -1067,6 +1174,7 @@ export const scaffold = (
       model,
       sandboxProvider,
       mainFilename,
+      issueTracker,
     );
 
     // Replace issue tracker template arguments in all text files (must run before label stripping)

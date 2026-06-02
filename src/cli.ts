@@ -21,6 +21,9 @@ import {
   getIssueTracker,
   listSandboxProviders,
   getSandboxProvider,
+  listApiProviders,
+  getApiProvider,
+  getSupportedAgents,
   getNextStepsLines,
   detectPackageManager,
   addDependencyCommand,
@@ -32,6 +35,7 @@ import type {
   AgentEntry,
   IssueTrackerEntry,
   SandboxProviderEntry,
+  ApiProviderEntry,
 } from "./InitService.js";
 import { ConfigDirError, InitError } from "./errors.js";
 import { VERSION } from "./version.js";
@@ -102,6 +106,13 @@ const initModelOption = Options.text("model").pipe(
   Options.optional,
 );
 
+const apiProviderOption = Options.text("api-provider").pipe(
+  Options.withDescription(
+    "API provider to use (anthropic-direct, zai). When zai is selected, env vars and default model change for supported agents",
+  ),
+  Options.optional,
+);
+
 const sandboxOption = Options.text("sandbox").pipe(
   Options.withDescription("Sandbox provider to use (e.g. docker, podman)"),
   Options.optional,
@@ -109,7 +120,7 @@ const sandboxOption = Options.text("sandbox").pipe(
 
 const issueTrackerOption = Options.text("issue-tracker").pipe(
   Options.withDescription(
-    "Issue tracker to use (e.g. github-issues, beads, custom)",
+    "Issue tracker to use (e.g. github-issues, gitea-issues, beads, custom)",
   ),
   Options.optional,
 );
@@ -122,7 +133,7 @@ const createLabelOption = Options.choice("create-label", [
   "false",
 ]).pipe(
   Options.withDescription(
-    'Whether to create the "Sandcastle" GitHub label (only meaningful with --issue-tracker github-issues)',
+    'Whether to create the "Sandcastle" label (meaningful with --issue-tracker github-issues or gitea-issues)',
   ),
   Options.optional,
 );
@@ -160,6 +171,7 @@ const initCommand = Command.make(
     template: templateOption,
     agent: agentOption,
     model: initModelOption,
+    apiProvider: apiProviderOption,
     sandbox: sandboxOption,
     issueTracker: issueTrackerOption,
     createLabel: createLabelOption,
@@ -171,6 +183,7 @@ const initCommand = Command.make(
     template,
     agent: agentFlag,
     model: modelFlag,
+    apiProvider: apiProviderFlag,
     sandbox: sandboxFlag,
     issueTracker: issueTrackerFlag,
     createLabel: createLabelFlag,
@@ -303,11 +316,66 @@ const initCommand = Command.make(
         selectedAgent = getAgent(selected as string)!;
       }
 
-      // Resolve model: CLI flag > agent default
+      // Resolve API provider: CLI flag > interactive select (between agent and model)
+      const apiProviders = listApiProviders();
+      let selectedApiProvider: ApiProviderEntry | undefined;
+      if (apiProviderFlag._tag === "Some") {
+        const entry = getApiProvider(apiProviderFlag.value);
+        if (!entry) {
+          const names = apiProviders.map((p) => p.name).join(", ");
+          yield* Effect.fail(
+            new InitError({
+              message: `Unknown API provider "${apiProviderFlag.value}". Available: ${names}`,
+            }),
+          );
+        }
+        selectedApiProvider = entry!;
+        // Validate agent compatibility
+        const supported = getSupportedAgents(selectedApiProvider);
+        if (supported && !supported.includes(selectedAgent.name)) {
+          yield* Effect.fail(
+            new InitError({
+              message: `Z AI is not available for ${selectedAgent.label}. Choose Anthropic (direct).`,
+            }),
+          );
+        }
+      } else {
+        // Only prompt if interactive — skip entirely for non-interactive (defaults to anthropic-direct)
+        if (isInteractive) {
+          // Filter to only providers that support the selected agent
+          const compatibleProviders = apiProviders.filter((p) => {
+            const supported = getSupportedAgents(p);
+            return !supported || supported.includes(selectedAgent.name);
+          });
+          // Only prompt if there's a meaningful choice (more than just anthropic-direct)
+          if (compatibleProviders.length > 1) {
+            const selected = yield* Effect.promise(() =>
+              clack.select({
+                message: "Select an API provider:",
+                initialValue: "anthropic-direct",
+                options: compatibleProviders.map((p) => ({
+                  value: p.name,
+                  label: p.label,
+                })),
+              }),
+            );
+            if (clack.isCancel(selected)) {
+              yield* Effect.fail(
+                new InitError({ message: "API provider selection cancelled." }),
+              );
+            }
+            selectedApiProvider = getApiProvider(selected as string)!;
+          }
+        }
+      }
+
+      // Resolve model: CLI flag > API provider default > agent default
+      const apiProviderModel =
+        selectedApiProvider?.agentDefaults[selectedAgent.name]?.defaultModel;
       const selectedModel =
         modelFlag._tag === "Some"
           ? modelFlag.value
-          : selectedAgent.defaultModel;
+          : (apiProviderModel ?? selectedAgent.defaultModel);
 
       // Resolve sandbox provider: CLI flag > interactive select (no default — user must choose)
       const sandboxProviders = listSandboxProviders();
@@ -393,25 +461,38 @@ const initCommand = Command.make(
         selectedTemplate = selected as string;
       }
 
-      // Offer to create the "Sandcastle" label on the repo (skip for non-GitHub issue trackers).
-      // CLI flag > interactive confirm. The flag is only meaningful for the github-issues tracker.
+      // Offer to create the "Sandcastle" label on the repo (skip for issue trackers that
+      // don't support labels).
+      // CLI flag > interactive confirm. The flag is meaningful for github-issues and gitea-issues.
       let shouldCreateLabel = false;
-      if (selectedIssueTracker.name === "github-issues") {
+      if (
+        selectedIssueTracker.name === "github-issues" ||
+        selectedIssueTracker.name === "gitea-issues"
+      ) {
+        const trackerLabel =
+          selectedIssueTracker.name === "github-issues" ? "GitHub" : "Gitea";
         shouldCreateLabel = yield* resolveConfirmFlag({
           choice: createLabelChoice,
           flag: "--create-label",
-          promptMessage:
-            'Create a "Sandcastle" GitHub label? (Templates filter issues by this label)',
+          promptMessage: `Create a "Sandcastle" ${trackerLabel} label? (Templates filter issues by this label)`,
           cancelMessage: "Label selection cancelled.",
         });
 
         if (shouldCreateLabel) {
           yield* Effect.try({
-            try: () =>
-              execSync(
-                'gh label create "Sandcastle" --description "Issues for Sandcastle to work on" --color "F9A825" 2>/dev/null',
-                { cwd, stdio: "ignore" },
-              ),
+            try: () => {
+              if (selectedIssueTracker.name === "gitea-issues") {
+                execSync(
+                  'tea labels create --name "Sandcastle" --description "Issues for Sandcastle to work on" --color "#F9A825" 2>/dev/null',
+                  { cwd, stdio: "ignore" },
+                );
+              } else {
+                execSync(
+                  'gh label create "Sandcastle" --description "Issues for Sandcastle to work on" --color "F9A825" 2>/dev/null',
+                  { cwd, stdio: "ignore" },
+                );
+              }
+            },
             catch: () => undefined,
           }).pipe(Effect.ignore);
         }
@@ -426,6 +507,7 @@ const initCommand = Command.make(
           createLabel: shouldCreateLabel,
           issueTracker: selectedIssueTracker,
           sandboxProvider: selectedSandboxProvider,
+          apiProvider: selectedApiProvider,
         }).pipe(
           Effect.mapError(
             (e) =>
